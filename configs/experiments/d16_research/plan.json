@@ -1,0 +1,155 @@
+{
+  "format": "nanochat-d16-research-plan-v1",
+  "date": "2026-09-28",
+  "status": "proposal-not-started",
+  "repository_reviewed_at": "84ac516c7223b69875bf1fce41491f711780e2af",
+  "model": {
+    "depth": 16,
+    "parameters": 230803270,
+    "non_embedding_parameters": 131516230,
+    "context": 4096,
+    "max_context_engineering_only": 32768
+  },
+  "budget": {
+    "requested_range_cny": [
+      1000,
+      2000
+    ],
+    "hard_ceiling_proposed_cny": 2000,
+    "historical_h800_price_cny_per_gpu_hour": 10.5,
+    "price_status": "Previous user-provided AutoDL quote, not a fresh market quote",
+    "pt_cpt_overhead_multiplier": 1.15,
+    "minimum_contingency_cny": 200,
+    "contingency_fraction_of_direct_cost": 0.2,
+    "other_gpu_hours_reserved": {
+      "calibration": 3,
+      "sft": 4,
+      "dpo": 4,
+      "rlvr": 8,
+      "independent_evaluation_and_recovery_checks": 9
+    },
+    "scenarios": [
+      {
+        "hypothetical_processed_tokens_per_second": 15000,
+        "pt_cpt_hours_with_overhead": 127.77777777777777,
+        "other_gpu_hours_reserved": 28,
+        "direct_gpu_cost_cny": 1635.6666666666665,
+        "contingency_cny": 327.1333333333333,
+        "total_budget_cny": 1962.7999999999997
+      },
+      {
+        "hypothetical_processed_tokens_per_second": 30000,
+        "pt_cpt_hours_with_overhead": 63.888888888888886,
+        "other_gpu_hours_reserved": 28,
+        "direct_gpu_cost_cny": 964.8333333333333,
+        "contingency_cny": 200,
+        "total_budget_cny": 1164.8333333333333
+      },
+      {
+        "hypothetical_processed_tokens_per_second": 60000,
+        "pt_cpt_hours_with_overhead": 31.944444444444443,
+        "other_gpu_hours_reserved": 28,
+        "direct_gpu_cost_cny": 629.4166666666666,
+        "contingency_cny": 200,
+        "total_budget_cny": 829.4166666666666
+      }
+    ],
+    "excludes": [
+      "engineering labor",
+      "human annotation",
+      "paid teacher or judge APIs",
+      "storage and transfer charges"
+    ]
+  },
+  "stages": [
+    {
+      "id": "P0",
+      "name": "engineering_and_evaluation",
+      "implemented": false
+    },
+    {
+      "id": "P1",
+      "name": "english_pretraining",
+      "recipe": "pretrain_5b.json",
+      "target_tokens": 5000000000,
+      "inspection_steps": [
+        3815,
+        7630,
+        22889,
+        38147
+      ],
+      "inspection_tokens_approx": [
+        500000000,
+        1000000000,
+        3000000000,
+        5000000000
+      ],
+      "stop_after_step_support_required": true
+    },
+    {
+      "id": "P2",
+      "name": "bilingual_continued_pretraining",
+      "recipe": "cpt_bilingual_1b.json",
+      "target_tokens": 1000000000,
+      "mixture_by_token": {
+        "english_replay": 0.4,
+        "chinese": 0.5,
+        "verifiable_math_and_explanations": 0.1
+      },
+      "new_optimizer_and_dataset": true
+    },
+    {
+      "id": "P3",
+      "name": "sft",
+      "recipe": "sft_pilot.json",
+      "pilot_conversations": 20000,
+      "main_conversations_target": 100000,
+      "assistant_token_language_fraction": {
+        "english": 0.8,
+        "chinese": 0.2
+      },
+      "epochs_initial": 1,
+      "pilot_max_steps": 512,
+      "actual_steps_from_prepared_records": true
+    },
+    {
+      "id": "P4",
+      "name": "dpo",
+      "implementation_status": "not implemented; this is not a trainer config",
+      "pilot_pairs": 5000,
+      "main_pairs": 20000,
+      "reference": "frozen_selected_sft",
+      "lr": 5e-06,
+      "beta": 0.1,
+      "batch_pairs": 32,
+      "epochs_initial": 1,
+      "completion_logprob_reduction": "sum"
+    },
+    {
+      "id": "P5",
+      "name": "rlvr_grpo",
+      "implementation_status": "not implemented; this is not a trainer config",
+      "entry": "selected DPO checkpoint, or SFT checkpoint if DPO fails its gate",
+      "prompts_per_update": 8,
+      "group_size": 4,
+      "max_completion_tokens": 128,
+      "pilot_updates": 200,
+      "maximum_updates_initial": 1000,
+      "lr": 1e-06,
+      "clip_epsilon": 0.2,
+      "kl_beta": 0.02,
+      "num_policy_iterations_per_rollout": 1,
+      "loss_reduction": "global valid-completion-token mean",
+      "verifier_required": true,
+      "fallback": "selected SFT or DPO checkpoint"
+    }
+  ],
+  "constraints": [
+    "No paid training is launched by this plan",
+    "Only hybrid GDN/SWA architecture",
+    "Pinned DeepSeek V4.1 tokenizer and Python prompt encoder",
+    "No automatic 32K experiment",
+    "Single GPU initially; current trainer rejects distributed execution",
+    "Post-training quality gates may stop the pipeline"
+  ]
+}

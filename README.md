@@ -8,6 +8,7 @@ streaming, checkpoints and explicit weight-only MLX warm starts, and has separat
 training/chat commands. See [CUDA installation and training](docs/cuda.md).
 The existing commands and Web UI below continue to use MLX.
 For CUDA-trained weights on Apple Silicon, see [local import and base-model evaluation](docs/local_evaluation.md).
+For the proposed ¥1,000–2,000 research experiment, see the [d16 pretraining, SFT, DPO and RL training plan](docs/training_plan_d16.md). It includes offline-inspected recipes, budget assumptions and the engineering gates still required before execution.
 
 Only the GDN/SWA hybrid architecture is supported. The old GPT architecture, BPE training, and checkpoint converter have been removed. Existing old-format checkpoints are not hybrid checkpoints. The AdamW-only recipe provides an optimizer control for the same hybrid model.
 

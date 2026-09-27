@@ -1,0 +1,25 @@
+{
+  "depth": 16,
+  "model": {
+    "architecture": "gdn_swa",
+    "sequence_len": 4096,
+    "max_context": 32768,
+    "checkpoint_blocks": true,
+    "loss_chunk_size": 1024
+  },
+  "training_tokens": 5000000000,
+  "training": {
+    "tokens_per_step": 131072,
+    "optimizer": "muon",
+    "muon_lr": 0.02,
+    "adamw_lr": 0.0003,
+    "momentum": 0.95,
+    "ns_steps": 5,
+    "weight_decay": 0.01,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "warmup_ratio": 0.02,
+    "min_lr_ratio": 0.1,
+    "grad_clip": 1.0
+  }
+}
