@@ -1,8 +1,8 @@
 """Chat using a hybrid checkpoint and the official DeepSeek V4.1 encoder."""
 
 import argparse
-from pathlib import Path
 import os
+from pathlib import Path
 
 
 def main(argv=None):
@@ -17,6 +17,11 @@ def main(argv=None):
     )
     p.add_argument("--prompt", "-p")
     p.add_argument("--interactive", action="store_true")
+    p.add_argument(
+        "--raw",
+        action="store_true",
+        help="Base-model continuation without chat framing",
+    )
     p.add_argument("--thinking-mode", choices=["chat", "thinking"], default="chat")
     p.add_argument("--reasoning-effort", type=int, default=75)
     p.add_argument("--max-tokens", type=int, default=256)
@@ -25,14 +30,17 @@ def main(argv=None):
     p.add_argument("--prefill-chunk-size", type=int, default=256)
     p.add_argument("--memory-limit-gb", type=float, default=8)
     args = p.parse_args(argv)
+    if args.raw and args.interactive:
+        p.error("--raw is a single-prompt base-model continuation")
     from nanochat_mlx.common import set_memory_limit
-    from nanochat_mlx.hybrid.tokenizer import DeepSeekTokenizer
     from nanochat_mlx.hybrid.checkpoint import load_checkpoint
     from nanochat_mlx.hybrid.engine import HybridEngine
+    from nanochat_mlx.hybrid.tokenizer import DeepSeekTokenizer
 
     set_memory_limit(args.memory_limit_gb)
     tokenizer = DeepSeekTokenizer(args.tokenizer_dir)
     model, _, _ = load_checkpoint(args.checkpoint, tokenizer.contract)
+    model.eval()
     engine = HybridEngine(model, tokenizer)
     messages = []
     while True:
@@ -40,10 +48,14 @@ def main(argv=None):
         if prompt.strip().lower() in ("quit", "exit"):
             break
         messages.append({"role": "user", "content": prompt})
-        tokens = tokenizer.apply_chat_template(
-            messages,
-            thinking_mode=args.thinking_mode,
-            reasoning_effort=args.reasoning_effort,
+        tokens = (
+            tokenizer.encode(prompt, prepend=tokenizer.contract["eos"])
+            if args.raw
+            else tokenizer.apply_chat_template(
+                messages,
+                thinking_mode=args.thinking_mode,
+                reasoning_effort=args.reasoning_effort,
+            )
         )
         output, last = [], ""
         for column, _ in engine.generate(

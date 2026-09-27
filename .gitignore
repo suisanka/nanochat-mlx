@@ -10,3 +10,4 @@ build/
 *.pt
 *.npy
 .env
+/artifacts/

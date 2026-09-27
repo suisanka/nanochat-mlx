@@ -7,10 +7,11 @@ PyTorch and FLA on a single NVIDIA GPU. It shares tokenizer/data/recipes, suppor
 streaming, checkpoints and explicit weight-only MLX warm starts, and has separate
 training/chat commands. See [CUDA installation and training](docs/cuda.md).
 The existing commands and Web UI below continue to use MLX.
+For CUDA-trained weights on Apple Silicon, see [local import and base-model evaluation](docs/local_evaluation.md).
 
 Only the GDN/SWA hybrid architecture is supported. The old GPT architecture, BPE training, and checkpoint converter have been removed. Existing old-format checkpoints are not hybrid checkpoints. The AdamW-only recipe provides an optimizer control for the same hybrid model.
 
-**Current scope:** architecture implementation, short numerical correctness checks, 4K and 32K training recipes, data preparation, and inference plumbing. No model has been trained as part of this migration. 32K is an engineering/configuration limit; actual 32K execution, memory/performance, and learned long-context ability are not validated.
+**Current scope:** architecture implementation, short numerical correctness checks, 4K and 32K training recipes, data preparation, inference and local base-model evaluation. A d4/4K CUDA pretraining run has completed 500M tokens; this is an initial experiment, not a claim of GPT-2-level quality. 32K remains an engineering/configuration limit; actual 32K execution, memory/performance, and learned long-context ability are not validated.
 
 ## Setup
 
