@@ -154,6 +154,19 @@ uv run python -m scripts.sft --depth 12 --data-dir /absolute/path/sft-data \
 
 `--resume` restores model, FP32 optimizer/master state and the data-loader position (mmap cursor or streaming iterator plus pending tokens); configuration, dataset identity, total steps and micro-batch size must match. `--init-from` is a new training phase, permits compatible context changes, and uses a fresh optimizer. Checkpoints are written under `hybrid_checkpoints/<architecture>/d<depth>/<base|sft>/`. Metadata is published last so incomplete saves are not discoverable. Previous checkpoints are retained.
 
+For throughput tuning, `--device-batch-size` changes the micro-batch and the
+trainer adjusts accumulation to preserve `--total-batch-size` tokens per update.
+The latter must remain exactly divisible by micro-batch × context. A larger
+`--loss-chunk-size` reduces CE tile launches and FP32 gradient copies at the cost
+of larger temporary logits. `--no-checkpoint-blocks` disables recomputation when
+memory permits. Measure candidate settings on the target machine before a run.
+
+`--memory-limit-gb` is MLX's working-set guideline, **not a hard process memory
+cap**. `--cache-limit-gb` (default 1) separately limits unused cached allocations.
+Leave headroom for transient buffers, host copies and system use. Training metrics
+report peak MLX allocations in GiB. Use `--save-first-step` to save a complete
+checkpoint after the first update as well as the normal `--save-every` interval.
+
 ## 32K context engineering
 
 The baseline training context remains 4K and the maximum supported configuration is 32,768 tokens. SWA keeps a 1,024-token window and absolute positions after eviction. GDN has no positional embedding. Prefill is chunked; intermediate prefill chunks do not project a full vocabulary tensor. GDN uses FP32 recurrent accumulation, so its cache is larger than the design document's hypothetical BF16-state budget but remains independent of sequence length.

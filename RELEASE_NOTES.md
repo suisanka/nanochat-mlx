@@ -1,5 +1,13 @@
 # Release notes
 
+## Training throughput controls
+
+- Expose loss tile size and activation-checkpoint disable options for measured
+  throughput tuning alongside micro-batch/accumulation settings.
+- Bound the unused MLX cache separately from its working-set guideline, and
+  validate both memory settings during offline plan inspection.
+- Add optional first-step checkpointing for early, resumable training evidence.
+
 ## Training memory and JIT kernels
 
 - Release custom-loss tile graphs explicitly: MLX's custom VJP retains graphs

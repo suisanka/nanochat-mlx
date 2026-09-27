@@ -24,6 +24,12 @@ def build_parser():
     p.add_argument("--max-seq-len", "--context-length", type=int, default=None)
     p.add_argument("--max-context", type=int, default=None)
     p.add_argument("--window-size", type=int, default=None)
+    p.add_argument(
+        "--loss-chunk-size",
+        type=int,
+        default=None,
+        help="Token tile size for JIT cross entropy",
+    )
     p.add_argument("--rope-scaling", choices=["none", "linear", "yarn"], default=None)
     p.add_argument("--rope-factor", type=float, default=None)
     p.add_argument("--data-dir", type=Path)
@@ -68,12 +74,25 @@ def build_parser():
     )
     p.add_argument("--source", choices=["base", "sft"], default="base")
     p.add_argument("--save-every", type=int, default=100)
+    p.add_argument(
+        "--save-first-step",
+        action="store_true",
+        help="Also checkpoint after the first update of this run",
+    )
     p.add_argument("--eval-every", type=int, default=100)
     p.add_argument("--eval-steps", type=int, default=5)
     p.add_argument("--diagnostics-every", type=int, default=100)
     p.add_argument("--memory-limit-gb", type=float, default=8)
+    p.add_argument(
+        "--cache-limit-gb",
+        type=float,
+        default=1,
+        help="Limit unused MLX allocations cached between operations",
+    )
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--checkpoint-blocks", action="store_true", default=None)
+    p.add_argument(
+        "--checkpoint-blocks", action=argparse.BooleanOptionalAction, default=None
+    )
     p.add_argument(
         "--dry-run",
         action="store_true",
@@ -96,6 +115,7 @@ def resolve_plan(args):
         ("sequence_len", "max_seq_len"),
         ("max_context", "max_context"),
         ("window_size", "window_size"),
+        ("loss_chunk_size", "loss_chunk_size"),
         ("rope_scaling", "rope_scaling"),
         ("rope_factor", "rope_factor"),
         ("checkpoint_blocks", "checkpoint_blocks"),
@@ -110,6 +130,13 @@ def resolve_plan(args):
     if args.optimizer is not None:
         training["optimizer"] = args.optimizer
     training = TrainingConfig(**training)
+    if not math.isfinite(args.memory_limit_gb) or args.memory_limit_gb <= 0:
+        raise ValueError("Memory limit must be finite and positive")
+    if (
+        not math.isfinite(args.cache_limit_gb)
+        or not 0 <= args.cache_limit_gb <= args.memory_limit_gb
+    ):
+        raise ValueError("Cache limit must be between zero and memory limit")
     micro_tokens = args.device_batch_size * model.sequence_len
     if micro_tokens <= 0 or training.tokens_per_step % micro_tokens:
         raise ValueError(
@@ -157,6 +184,8 @@ def resolve_plan(args):
         "effective_tokens": steps * training.tokens_per_step,
         "gradient_accumulation": training.tokens_per_step // micro_tokens,
         "micro_batch": args.device_batch_size,
+        "memory_limit_gb": args.memory_limit_gb,
+        "cache_limit_gb": args.cache_limit_gb,
         "parameter_counts": model.parameter_counts(),
         "data_profile": "sft" if args.source == "sft" else recipe.get("data_profile"),
         "source": args.source,
@@ -198,7 +227,7 @@ def train(args, plan):
     tokenizer = DeepSeekTokenizer(args.tokenizer_dir)
     if config.vocab_size != tokenizer.get_vocab_size():
         raise ValueError("Model/tokenizer vocabulary mismatch")
-    set_memory_limit(args.memory_limit_gb)
+    set_memory_limit(args.memory_limit_gb, args.cache_limit_gb)
     mx.random.seed(args.seed)
     loader_state = None
     if args.resume:
@@ -308,8 +337,10 @@ def train(args, plan):
             metrics.write(json.dumps(record) + "\n")
             metrics.flush()
             print(json.dumps(record), flush=True)
-            if step + 1 == plan["steps"] or (
-                args.save_every > 0 and (step + 1) % args.save_every == 0
+            if (
+                (args.save_first_step and step == start_step)
+                or step + 1 == plan["steps"]
+                or (args.save_every > 0 and (step + 1) % args.save_every == 0)
             ):
                 save_checkpoint(
                     directory,

@@ -59,6 +59,41 @@ def test_invalid_batch_and_legacy_mode():
             HybridConfig(architecture=mode)
 
 
+def test_throughput_overrides_preserve_effective_batch():
+    args = build_parser().parse_args(
+        [
+            "--recipe",
+            "configs/gdn_swa_4k.json",
+            "--depth",
+            "4",
+            "--device-batch-size",
+            "8",
+            "--loss-chunk-size",
+            "512",
+            "--no-checkpoint-blocks",
+            "--memory-limit-gb",
+            "18",
+            "--cache-limit-gb",
+            "1",
+            "--save-first-step",
+        ]
+    )
+    plan = resolve_plan(args)
+    assert plan["micro_batch"] == 8 and plan["gradient_accumulation"] == 4
+    assert plan["training"]["tokens_per_step"] == 131072
+    assert plan["model"]["loss_chunk_size"] == 512
+    assert plan["model"]["checkpoint_blocks"] is False
+    assert plan["memory_limit_gb"] == 18 and plan["cache_limit_gb"] == 1
+    assert args.save_first_step is True and plan["training_started"] is False
+    for options in (
+        ["--memory-limit-gb", "nan"],
+        ["--cache-limit-gb", "9"],
+        ["--loss-chunk-size", "0"],
+    ):
+        with pytest.raises(ValueError):
+            resolve_plan(build_parser().parse_args(options))
+
+
 def test_uint32_data_eos_split_and_exact_resume(tmp_path, tokenizer):
     prepare_documents(
         tmp_path, ["Hello world.你好！" * 20], ["Validation only." * 30], tokenizer
