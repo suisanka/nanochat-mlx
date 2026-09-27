@@ -21,9 +21,10 @@ Source design: the final v0 architecture in [解读Qwen架构](chatgpt-conversat
 
 ## MLX backend adaptation
 
-The linked design was written around nanoGPT/PyTorch/FLA CUDA. This repository
-remains single-device MLX; there is no CUDA, PyTorch or DDP dependency. Backend
-choices preserve the specified equations and expose numerical correctness paths:
+The linked design was written around nanoGPT/PyTorch/FLA CUDA. The default
+Apple Silicon installation remains single-device MLX without a PyTorch dependency.
+The optional `nanochat_cuda` backend is described below. Backend choices preserve
+the specified equations and expose numerical correctness paths:
 
 | Design requirement | Implementation | Validation |
 |---|---|---|
@@ -54,6 +55,28 @@ At the d12 BF16 anchor, persistent state is approximately 1.5 MiB GDN FP32 state
 2 MiB SWA KV, plus 72 KiB short-convolution state per sequence. This excludes
 transient activations, logits, model weights and allocator overhead. It is a
 shape-derived budget, not a measured peak-memory claim.
+
+## CUDA backend
+
+`nanochat_cuda/` implements the same parameter layouts and hybrid equations in
+PyTorch. FLA supplies differentiable chunk GDN and inference-only fused recurrent
+decode. SWA uses bounded local SDPA tiles or an explicitly selected optional
+FlashAttention-2 sliding-window kernel. No full-sequence mask is allocated.
+
+Recomputed linear cross entropy retains hidden states, weights and labels, then
+recomputes one token/vocabulary tile at a time during backward. It supports first
+derivatives only and avoids the full `B*T*V` logit allocation. Model weights are
+BF16; controllers, recurrent state, gradient accumulation, optimizer masters and
+moments use FP32. Native autograd and non-reentrant activation checkpointing
+provide the backward path. SwiGLU and Muon's Newton–Schulz use `torch.compile`;
+FLA kernels use Triton JIT. This is not a full-graph compiled training loop.
+
+Config, tokenizer, NumPy data packing, streaming state, and recipes are reused
+without importing MLX. CUDA checkpoints have their own format/directory and
+include PyTorch RNG. Explicit MLX hybrid weight-only initialization is supported;
+cross-backend optimizer state and bitwise training equivalence are not promised.
+CPU numerical checks include actual MLX checkpoint/logit/gradient interchange.
+GPU tests are separate and require NVIDIA hardware. See [CUDA usage](cuda.md).
 
 ## Optimizer and schedule
 

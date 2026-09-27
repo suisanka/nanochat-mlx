@@ -5,7 +5,7 @@ description = "Gated DeltaNet and sliding-window language model research on Appl
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "mlx>=0.32.2",
+    "mlx>=0.32.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "datasets>=4.0.0",
     "fastapi>=0.117.1",
     "numpy>=1.24.0",
@@ -21,6 +21,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
+torch = ["torch==2.14.0", "safetensors>=0.4.3"]
+cuda = [
+    "torch==2.14.0",
+    "safetensors>=0.4.3",
+    "fla-core[cuda]==0.5.2; sys_platform == 'linux'",
+]
 
 [dependency-groups]
 dev = [
@@ -31,6 +37,7 @@ dev = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "tokenizer: requires the locally installed official tokenizer (no download during tests)",
+    "cuda: requires an NVIDIA GPU and the CUDA backend dependencies",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

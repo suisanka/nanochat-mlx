@@ -7,7 +7,7 @@ from collections import defaultdict
 import numpy as np
 
 
-def main(argv=None):
+def main(argv=None, *, backend="mlx"):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--checkpoint", required=True, type=Path)
     p.add_argument("--tokenizer-dir", required=True, type=Path)
@@ -15,17 +15,37 @@ def main(argv=None):
     p.add_argument("--max-problems", type=int, default=100)
     p.add_argument("--max-tokens", type=int, default=64)
     p.add_argument("--output", required=True, type=Path)
-    p.add_argument("--memory-limit-gb", type=float, default=8)
+    if backend == "mlx":
+        p.add_argument("--memory-limit-gb", type=float, default=8)
+    elif backend == "cuda":
+        p.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+        p.add_argument("--gdn-backend", choices=("fla", "reference"), default="fla")
+        p.add_argument("--attention-backend", choices=("sdpa", "flash"), default="sdpa")
+    else:
+        raise ValueError("Unknown evaluation backend")
     args = p.parse_args(argv)
     from nanochat_mlx.hybrid.tokenizer import DeepSeekTokenizer
-    from nanochat_mlx.hybrid.checkpoint import load_checkpoint
-    from nanochat_mlx.hybrid.engine import HybridEngine
     from nanochat_mlx.hybrid.data import TokenDataset
-    from nanochat_mlx.common import set_memory_limit
 
-    set_memory_limit(args.memory_limit_gb)
     tokenizer = DeepSeekTokenizer(args.tokenizer_dir)
-    model, _, _ = load_checkpoint(args.checkpoint, tokenizer.contract)
+    if backend == "mlx":
+        from nanochat_mlx.hybrid.checkpoint import load_checkpoint
+        from nanochat_mlx.hybrid.engine import HybridEngine
+        from nanochat_mlx.common import set_memory_limit
+
+        set_memory_limit(args.memory_limit_gb)
+        model, _, _ = load_checkpoint(args.checkpoint, tokenizer.contract)
+    else:
+        from nanochat_cuda.checkpoint import load_checkpoint
+        from nanochat_cuda.engine import HybridEngine
+
+        model, _, _ = load_checkpoint(
+            args.checkpoint,
+            tokenizer.contract,
+            args.device,
+            args.gdn_backend,
+            args.attention_backend,
+        )
     engine = HybridEngine(model, tokenizer)
     meta = json.loads((args.data_dir / "meta.json").read_text())
     record_length = meta["record_length"]

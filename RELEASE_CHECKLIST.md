@@ -28,3 +28,18 @@
 
 Passing code checks does not close research gates. No trained checkpoint or
 32K quality/performance claim is part of this migration.
+
+## Optional CUDA backend gate
+
+- Resolve `uv.lock` with `--extra cuda` for Linux without installing MLX.
+- Run `tests/cuda` with the `torch` extra for short CPU reference/loss/cache,
+  weighted accumulation, optimizer and checkpoint/RNG checks.
+- On Apple Silicon with both extras available, run `tests/test_cuda_interchange.py`
+  to compare actual MLX safetensors, logits, loss and parameter gradients.
+- Confirm dry-run works without importing either tensor runtime and that existing
+  MLX-only installations do not require PyTorch.
+- On an NVIDIA host, run `tests/cuda -m cuda`: actual FLA forward/backward/state,
+  recurrent decode, compiled model gradients and optional FlashAttention parity.
+  CPU passes or skipped CUDA tests do not close this GPU gate.
+- Keep CUDA throughput/peak-memory and actual long-context claims separate from
+  code delivery; see `docs/cuda.md` for installation and validation boundaries.

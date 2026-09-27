@@ -1,5 +1,20 @@
 # Release notes
 
+## Optional PyTorch / FLA CUDA backend
+
+- Add `nanochat_cuda` with the same hybrid architecture, depth presets, 32K
+  configuration limit, official tokenizer, mmap/streaming data and SFT masks.
+- Use FLA GDN kernels, local tiled SDPA or optional FlashAttention-2, recomputed
+  vocabulary loss, BF16 parameters and FP32 optimizer/accumulation state.
+- Compile SwiGLU and Muon hot paths; keep training, chat and scenario-evaluation
+  CLI entry points separate from the existing MLX Web UI and commands.
+- Add atomic CUDA safetensors checkpoints including RNG/data state, strict resume,
+  and explicit current-MLX hybrid weight-only initialization.
+- Keep PyTorch/FLA optional; Linux CUDA installation does not install MLX.
+- Verified short CPU numerics, actual MLX weight/logit/gradient interchange, CPU
+  Inductor compilation, and Linux dependency resolution. NVIDIA kernel checks
+  require a separate GPU run; no CUDA training or actual 32K test was performed.
+
 ## Training throughput controls
 
 - Expose loss tile size and activation-checkpoint disable options for measured

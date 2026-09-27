@@ -12,7 +12,7 @@ import time
 from .config import HybridConfig, TrainingConfig, config_for_depth
 
 
-def build_parser():
+def build_parser(*, mlx_options=True):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
         "--architecture",
@@ -82,13 +82,14 @@ def build_parser():
     p.add_argument("--eval-every", type=int, default=100)
     p.add_argument("--eval-steps", type=int, default=5)
     p.add_argument("--diagnostics-every", type=int, default=100)
-    p.add_argument("--memory-limit-gb", type=float, default=8)
-    p.add_argument(
-        "--cache-limit-gb",
-        type=float,
-        default=1,
-        help="Limit unused MLX allocations cached between operations",
-    )
+    if mlx_options:
+        p.add_argument("--memory-limit-gb", type=float, default=8)
+        p.add_argument(
+            "--cache-limit-gb",
+            type=float,
+            default=1,
+            help="Limit unused MLX allocations cached between operations",
+        )
     p.add_argument("--seed", type=int, default=42)
     p.add_argument(
         "--checkpoint-blocks", action=argparse.BooleanOptionalAction, default=None
@@ -96,7 +97,7 @@ def build_parser():
     p.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print resolved configuration without loading data or MLX",
+        help="Print resolved configuration without loading data or a tensor runtime",
     )
     p.add_argument(
         "--start-training",
@@ -130,13 +131,18 @@ def resolve_plan(args):
     if args.optimizer is not None:
         training["optimizer"] = args.optimizer
     training = TrainingConfig(**training)
-    if not math.isfinite(args.memory_limit_gb) or args.memory_limit_gb <= 0:
-        raise ValueError("Memory limit must be finite and positive")
-    if (
-        not math.isfinite(args.cache_limit_gb)
-        or not 0 <= args.cache_limit_gb <= args.memory_limit_gb
-    ):
-        raise ValueError("Cache limit must be between zero and memory limit")
+    memory_options = {}
+    if hasattr(args, "memory_limit_gb"):
+        if not math.isfinite(args.memory_limit_gb) or args.memory_limit_gb <= 0:
+            raise ValueError("Memory limit must be finite and positive")
+        if (
+            not math.isfinite(args.cache_limit_gb)
+            or not 0 <= args.cache_limit_gb <= args.memory_limit_gb
+        ):
+            raise ValueError("Cache limit must be between zero and memory limit")
+        memory_options = dict(
+            memory_limit_gb=args.memory_limit_gb, cache_limit_gb=args.cache_limit_gb
+        )
     micro_tokens = args.device_batch_size * model.sequence_len
     if micro_tokens <= 0 or training.tokens_per_step % micro_tokens:
         raise ValueError(
@@ -184,8 +190,7 @@ def resolve_plan(args):
         "effective_tokens": steps * training.tokens_per_step,
         "gradient_accumulation": training.tokens_per_step // micro_tokens,
         "micro_batch": args.device_batch_size,
-        "memory_limit_gb": args.memory_limit_gb,
-        "cache_limit_gb": args.cache_limit_gb,
+        **memory_options,
         "parameter_counts": model.parameter_counts(),
         "data_profile": "sft" if args.source == "sft" else recipe.get("data_profile"),
         "source": args.source,

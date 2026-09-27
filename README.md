@@ -2,6 +2,12 @@
 
 A single-device MLX research language model for Apple Silicon. The default backbone is **GDN → GDN → sliding-window attention**, with dense SwiGLU, tied embeddings, the official **DeepSeek V4.1 tokenizer and prompt encoder**, and Muon plus auxiliary AdamW.
 
+The same hybrid architecture is also available in **`nanochat_cuda/`**, using
+PyTorch and FLA on a single NVIDIA GPU. It shares tokenizer/data/recipes, supports
+streaming, checkpoints and explicit weight-only MLX warm starts, and has separate
+training/chat commands. See [CUDA installation and training](docs/cuda.md).
+The existing commands and Web UI below continue to use MLX.
+
 Only the GDN/SWA hybrid architecture is supported. The old GPT architecture, BPE training, and checkpoint converter have been removed. Existing old-format checkpoints are not hybrid checkpoints. The AdamW-only recipe provides an optimizer control for the same hybrid model.
 
 **Current scope:** architecture implementation, short numerical correctness checks, 4K and 32K training recipes, data preparation, and inference plumbing. No model has been trained as part of this migration. 32K is an engineering/configuration limit; actual 32K execution, memory/performance, and learned long-context ability are not validated.
