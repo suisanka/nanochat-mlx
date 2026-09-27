@@ -70,7 +70,11 @@ def save_checkpoint(
         training=asdict(training_config) if training_config else None,
         optimizer=optimizer is not None,
         run=run,
-        kernels=dict(gdn=model.gdn_backend, attention=model.attention_backend),
+        kernels=dict(
+            gdn=model.gdn_backend,
+            attention=model.attention_backend,
+            loss="fla" if model.fused_loss else "recompute",
+        ),
         torch_version=torch.__version__,
     )
     (pending / f"{stem}.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -89,6 +93,7 @@ def load_checkpoint(
     attention_backend="sdpa",
     load_optimizer=False,
     compile=False,
+    fused_loss=False,
 ):
     metadata = Path(metadata)
     meta = json.loads(metadata.read_text())
@@ -98,9 +103,9 @@ def load_checkpoint(
         )
     if tokenizer_contract is not None and meta["tokenizer"] != tokenizer_contract:
         raise ValueError("Checkpoint tokenizer contract mismatch")
-    model = HybridLM(HybridConfig(**meta["model"]), gdn_backend, attention_backend).to(
-        device
-    )
+    model = HybridLM(
+        HybridConfig(**meta["model"]), gdn_backend, attention_backend, fused_loss
+    ).to(device)
     model.load_state_dict(
         load_file(str(metadata.with_suffix(".safetensors")), device=str(device)),
         strict=True,

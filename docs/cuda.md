@@ -89,6 +89,41 @@ The training loop, cache mutation, and recomputed vocabulary loss are eager.
 There is no claim of full-graph training compilation. Use `--no-compile` to
 isolate compiler problems. First-call compilation costs are included in step time.
 
+On an H800 PCIe, a measured d4/4K configuration is:
+
+```bash
+uv run --no-sync python -m scripts.train_cuda \
+  --recipe configs/gdn_swa_4k.json --depth 4 --context-length 4096 \
+  --device-batch-size 16 --loss-chunk-size 4096 --no-checkpoint-blocks \
+  --fused-loss --matmul-precision high --prefetch-batches 2 --prefetch-process \
+  --stream-dataset karpathy/fineweb-edu-100b-shuffle \
+  --stream-revision 4c8f30d6756da75362432a4d5569e1b229263b71 \
+  --stream-cache-parquet --stream-val-documents 1024 \
+  --tokenizer-dir /path/deepseek_tokenizer --output-dir /path/run \
+  --save-first-step --save-every 100 --start-training
+```
+
+`--fused-loss` explicitly selects FLA's fused linear cross entropy, retaining FP32
+weight-gradient accumulation. Its rounded token tile must fit `--loss-chunk-size`;
+otherwise it raises an error. `--matmul-precision high` permits Tensor Core
+arithmetic for FP32 matrix multiplications, while optimizer states and accumulated
+gradients remain FP32. These settings are recorded in the resume contract. The
+defaults preserve the original recomputed loss and highest matmul precision.
+
+`--prefetch-batches 2` overlaps bounded CPU loading/tokenization with GPU work.
+For streaming datasets, `--prefetch-process` uses a spawned CPU process to avoid
+Python GIL contention with GPU kernel launches. Mmap data supports thread prefetch.
+Checkpoint cursors correspond to the last consumed batch, including pending EOS
+packing tokens; queued lookahead is not skipped on resume. Prefetch is disabled
+by default and can be changed when resuming without changing data order.
+
+The September 28, 2026 H800 PCIe check (PyTorch 2.14.0, CUDA 13.0) measured about
+203k tokens/s for this configuration on five warmed synthetic optimizer steps,
+with 7.99 GiB peak allocated memory. The recomputed-loss path measured 157k
+tokens/s at batch 8 and 169k at batch 32. Synthetic throughput excludes corpus
+loading, evaluation, checkpoint writes, installation, and initial compilation;
+it is not a guarantee of finishing 500M real tokens in one hour.
+
 The trainer supports one process/GPU. `WORLD_SIZE > 1` is rejected; DDP, FSDP,
 context parallelism, and multi-node training are not implemented.
 
@@ -99,6 +134,17 @@ uint32 mmap format. All preparation commands in the main README apply on Linux
 without importing MLX. Base streaming preserves the pinned Hub SHA, exact pending
 token buffer and dataset iterator state. Online SFT/synthetic streaming is not
 supported. SFT uses the same official assistant-only masks as MLX.
+
+`--stream-cache-parquet` handles flat, single-split Parquet repositories whose
+directory pagination is unreliable through a proxy. It resolves the immutable
+Hub SHA and complete filename manifest once, downloads the current shard to the
+HF cache if absent, and reads it in bounded Arrow batches. Existing cached shards
+are used without a network request. It preserves the first-N-document validation
+holdout and saves shard/example cursors for exact resume. It does not load the
+whole corpus into RAM, but downloaded shards remain on disk. Named dataset
+configurations, nested Parquet layouts, and separate validation splits require
+the normal streaming path. A cached data source is a distinct resume contract;
+do not use it to resume an existing ordinary HTTP stream checkpoint.
 
 CUDA checkpoints are isolated at:
 

@@ -1,5 +1,6 @@
 """Recomputed linear cross entropy: O(tile*V), no retained full B*T*V logits."""
 
+import math
 import torch
 from torch.nn import functional as F
 from torch.autograd.function import once_differentiable
@@ -47,8 +48,25 @@ class _LinearCrossEntropy(torch.autograd.Function):
 
 
 @torch.compiler.disable
-def linear_cross_entropy(hidden, weight, targets, chunk_size=64):
+def linear_cross_entropy(hidden, weight, targets, chunk_size=64, fused=False):
     """Mean over non--1 labels; first derivatives only, including tied weights."""
     if chunk_size <= 0 or targets.shape != hidden.shape[:-1]:
         raise ValueError("Invalid loss tile or target shape")
+    if fused:
+        if not hidden.is_cuda or hidden.dtype not in (torch.bfloat16, torch.float16):
+            raise ValueError("Fused cross entropy requires CUDA FP16/BF16")
+        from fla.modules.fused_linear_cross_entropy import FusedLinearCrossEntropyLoss
+
+        # FLA rounds the tile up to a power of two and caps the chunk count.
+        # Fail explicitly rather than exceeding the requested memory bound.
+        chunks = min(
+            math.ceil(targets.numel() / chunk_size),
+            math.ceil(weight.shape[0] / hidden.shape[-1]),
+        )
+        tile = 1 << (math.ceil(targets.numel() / chunks) - 1).bit_length()
+        if tile > chunk_size:
+            raise ValueError(f"FLA loss requires loss-chunk-size >= {tile}")
+        return FusedLinearCrossEntropyLoss(
+            ignore_index=-1, num_chunks=chunks, accumulate_grad_in_fp32=True
+        )(hidden, targets.long(), weight)
     return _LinearCrossEntropy.apply(hidden, weight, targets.long(), chunk_size)

@@ -107,3 +107,33 @@ def test_cuda_compiled_model_loss_backward_and_cache():
         model.prefill(ids[:, :-1], cache, 5)
         last = model(ids[:, -1:], kv_cache=cache)
         torch.testing.assert_close(last, full[:, -1:], atol=0.015, rtol=0.08)
+
+
+@pytest.mark.parametrize("masked", [False, True])
+def test_fused_loss_tied_gradients_and_scaling(masked):
+    from nanochat_cuda.loss import linear_cross_entropy
+
+    precision = torch.get_float32_matmul_precision()
+    torch.set_float32_matmul_precision("high")
+    try:
+        torch.manual_seed(17)
+        weight = (
+            (torch.randn(129280, 64, device="cuda") * 0.02).bfloat16().requires_grad_()
+        )
+        ids = torch.randint(129280, (1, 17), device="cuda")
+        target = torch.randint(129280, ids.shape, device="cuda")
+        if masked:
+            target[:, ::3] = -1
+        hidden = torch.nn.functional.embedding(ids, weight)
+        expected = linear_cross_entropy(hidden, weight, target, 16)
+        actual = linear_cross_entropy(hidden, weight, target, 16, fused=True)
+        torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-5)
+        (expected_grad,) = torch.autograd.grad(
+            expected * 0.25, weight, retain_graph=True
+        )
+        (actual_grad,) = torch.autograd.grad(actual * 0.25, weight)
+        torch.testing.assert_close(actual_grad, expected_grad, atol=2e-5, rtol=0.04)
+        with pytest.raises(ValueError, match="loss-chunk-size"):
+            linear_cross_entropy(hidden, weight, target, 7, fused=True)
+    finally:
+        torch.set_float32_matmul_precision(precision)

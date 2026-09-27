@@ -48,6 +48,11 @@ def build_parser(*, mlx_options=True):
     p.add_argument("--stream-val-documents", type=int, default=1024)
     p.add_argument("--stream-text-column", default="text")
     p.add_argument(
+        "--stream-cache-parquet",
+        action="store_true",
+        help="Download one pinned Parquet shard at a time; avoids Hub directory pagination",
+    )
+    p.add_argument(
         "--tokenizer-dir",
         type=Path,
         default=Path(os.path.expanduser("~/.cache/nanochat/deepseek_tokenizer")),
@@ -181,6 +186,7 @@ def resolve_plan(args):
                 val_split=args.stream_val_split,
                 val_documents=args.stream_val_documents,
                 text_column=args.stream_text_column,
+                cache_parquet=args.stream_cache_parquet,
             )
         )
     return {

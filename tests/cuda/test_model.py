@@ -351,19 +351,12 @@ def test_mmap_adapter_cursor_without_mlx(tmp_path):
         torch.testing.assert_close(a, b, atol=0, rtol=0)
 
 
-def test_stream_adapter_cursor(tmp_path):
+@pytest.mark.parametrize("prefetch", [0, 2, "process"])
+def test_stream_adapter_cursor(tmp_path, prefetch):
     import datasets
     from nanochat_mlx.hybrid.streaming import StreamingTokenDataset
-    from nanochat_cuda.data import next_batch
-
-    class Tokenizer:
-        contract = {"eos": 1, "vocab_size": 256}
-
-        def encode(self, text):
-            return list(text.encode("ascii"))
-
-        def get_vocab_size(self):
-            return 256
+    from nanochat_cuda.data import next_batch, PrefetchedDataset
+    from tests.test_streaming_data import CharacterTokenizer as Tokenizer
 
     def create(state=None):
         stream = datasets.Dataset.from_dict(
@@ -377,6 +370,8 @@ def test_stream_adapter_cursor(tmp_path):
         return StreamingTokenDataset(stream, Tokenizer(), source, "train", 7, 2, state)
 
     loader = create()
+    if prefetch:
+        loader = PrefetchedDataset(loader, 2, process=prefetch == "process")
     next_batch(loader, torch.device("cpu"))
     resumed = create(json.loads(json.dumps(loader.state_dict())))
     for _ in range(3):
@@ -387,3 +382,38 @@ def test_stream_adapter_cursor(tmp_path):
             torch.testing.assert_close(a, b, atol=0, rtol=0)
     loader.close()
     resumed.close()
+
+
+def test_prefetch_cursor_ignores_lookahead_and_propagates_errors():
+    import threading
+    from nanochat_cuda.data import PrefetchedDataset
+
+    ready = threading.Event()
+
+    class Loader:
+        meta = {}
+        position = 0
+
+        def state_dict(self):
+            return {"position": self.position}
+
+        def next_numpy(self):
+            self.position += 1
+            if self.position == 3:
+                ready.set()
+                raise RuntimeError("data failed")
+            return self.position
+
+    loader = PrefetchedDataset(Loader(), 2)
+    try:
+        assert ready.wait(2)
+        assert loader.state_dict() == {"position": 0}
+        assert loader.next_numpy() == 1
+        assert loader.state_dict() == {"position": 1}
+        assert loader.next_numpy() == 2
+        with pytest.raises(RuntimeError, match="data failed"):
+            loader.next_numpy()
+        assert loader.state_dict() == {"position": 2}
+    finally:
+        loader.close()
+    assert not loader.thread.is_alive()

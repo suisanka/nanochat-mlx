@@ -20,6 +20,26 @@ def build_parser():
     p.add_argument("--gdn-backend", choices=("fla", "reference"), default="fla")
     p.add_argument("--attention-backend", choices=("sdpa", "flash"), default="sdpa")
     p.add_argument(
+        "--prefetch-process",
+        action="store_true",
+        help="Spawn a CPU data process to avoid contention with the GPU launch thread",
+    )
+    p.add_argument(
+        "--prefetch-batches",
+        type=int,
+        default=0,
+        help="Bounded CPU read-ahead; checkpoints retain the consumed data cursor",
+    )
+    p.add_argument(
+        "--fused-loss", action="store_true", help="Use FLA's fused linear cross entropy"
+    )
+    p.add_argument(
+        "--matmul-precision",
+        choices=("highest", "high"),
+        default="highest",
+        help="high permits TF32 for FP32 matmuls; optimizer state remains FP32",
+    )
+    p.add_argument(
         "--compile",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -52,6 +72,12 @@ def resolve_plan(args):
         raise ValueError("cuda-memory-fraction must be in (0, 1]")
     if args.device == "cpu" and args.cuda_memory_fraction is not None:
         raise ValueError("cuda-memory-fraction requires --device cuda")
+    if args.prefetch_batches < 0:
+        raise ValueError("prefetch-batches must be nonnegative")
+    if args.fused_loss and (
+        args.device != "cuda" or plan["model"]["dtype"] != "bfloat16"
+    ):
+        raise ValueError("Fused loss requires CUDA BF16")
     if (
         min(args.save_every, args.eval_every, args.eval_steps, args.diagnostics_every)
         < 0
@@ -65,6 +91,10 @@ def resolve_plan(args):
         compile=args.compile,
         cuda_memory_fraction=args.cuda_memory_fraction,
     )
+    if args.fused_loss:
+        plan["backend"]["fused_loss"] = True
+    if args.matmul_precision != "highest":
+        plan["backend"]["matmul_precision"] = args.matmul_precision
     return plan
 
 
@@ -116,7 +146,7 @@ def train(args, plan):
         load_checkpoint,
         save_checkpoint,
     )
-    from .data import build_datasets, next_batch
+    from .data import build_datasets, next_batch, PrefetchedDataset
     from .gdn import fla_kernels
     from .attention import flash_kernel
     from .model import HybridLM
@@ -126,6 +156,7 @@ def train(args, plan):
     if args.data_dir is None and plan["streaming"] is None:
         raise ValueError("--data-dir or --stream-dataset is required to start training")
     device = torch.device(args.device)
+    torch.set_float32_matmul_precision(args.matmul_precision)
     if device.type == "cuda":
         if not torch.cuda.is_available():
             raise ValueError("CUDA is unavailable; this command requires an NVIDIA GPU")
@@ -160,6 +191,7 @@ def train(args, plan):
             args.attention_backend,
             load_optimizer=True,
             compile=args.compile,
+            fused_loss=args.fused_loss,
         )
         if (
             model.config != config
@@ -177,7 +209,9 @@ def train(args, plan):
         if loader_state is None:
             raise ValueError("Resume checkpoint is missing data position")
     else:
-        model = HybridLM(config, args.gdn_backend, args.attention_backend).to(device)
+        model = HybridLM(
+            config, args.gdn_backend, args.attention_backend, args.fused_loss
+        ).to(device)
         if args.init_from:
             initialize_weights(model, args.init_from, tokenizer.contract)
         optimizer = HybridOptimizer(model, training, args.compile)
@@ -189,6 +223,10 @@ def train(args, plan):
     directory.mkdir(parents=True, exist_ok=True)
     with ExitStack() as resources:
         loader, val = build_datasets(args, plan, tokenizer, loader_state)
+        if args.prefetch_batches:
+            loader = PrefetchedDataset(
+                loader, args.prefetch_batches, args.prefetch_process
+            )
         for dataset in (loader, val):
             if hasattr(dataset, "close"):
                 resources.callback(dataset.close)

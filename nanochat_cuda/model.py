@@ -75,7 +75,9 @@ class Block(nn.Module):
 
 
 class HybridLM(nn.Module):
-    def __init__(self, config, gdn_backend="fla", attention_backend="sdpa"):
+    def __init__(
+        self, config, gdn_backend="fla", attention_backend="sdpa", fused_loss=False
+    ):
         super().__init__()
         if gdn_backend not in ("fla", "reference") or attention_backend not in (
             "sdpa",
@@ -84,6 +86,7 @@ class HybridLM(nn.Module):
             raise ValueError("Invalid kernel backend")
         self.config = config
         self.gdn_backend, self.attention_backend = gdn_backend, attention_backend
+        self.fused_loss = fused_loss
         self.wte = nn.Embedding(config.vocab_size, config.n_embd)
         self.blocks = nn.ModuleList(
             Block(config, kind, gdn_backend, attention_backend)
@@ -155,7 +158,11 @@ class HybridLM(nn.Module):
         h = self.hidden(ids, kv_cache)
         if targets is not None:
             return linear_cross_entropy(
-                h, self.wte.weight, targets, self.config.loss_chunk_size
+                h,
+                self.wte.weight,
+                targets,
+                self.config.loss_chunk_size,
+                self.fused_loss,
             )
         return F.linear(h[:, -1:] if last_only else h, self.wte.weight).float()
 

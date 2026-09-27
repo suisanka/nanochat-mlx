@@ -274,3 +274,55 @@ def test_stream_dry_run_offline_and_invalid_combinations(monkeypatch, capsys):
     ):
         with pytest.raises(ValueError):
             resolve_plan(build_parser().parse_args(base + extra))
+
+
+def test_cached_parquet_pins_files_and_resumes_without_directory_listing(
+    corpus, tmp_path, monkeypatch
+):
+    _, paths = corpus
+    files = {f"shard_{i:05d}.parquet": path for i, path in enumerate(paths)}
+    calls = []
+
+    def info(*a, **kw):
+        calls.append("info")
+        return SimpleNamespace(
+            sha="a" * 40, siblings=[SimpleNamespace(rfilename=f) for f in files]
+        )
+
+    def download(dataset, filename, repo_type, revision):
+        assert (
+            dataset == "test/corpus" and repo_type == "dataset" and revision == "a" * 40
+        )
+        calls.append(filename)
+        return files[filename]
+
+    def no_listing(*a, **kw):
+        pytest.fail("Cached shards must not use load_dataset/glob directory discovery")
+
+    monkeypatch.setattr("huggingface_hub.HfApi.dataset_info", info)
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", download)
+    monkeypatch.setattr(datasets, "load_dataset", no_listing)
+    config = StreamConfig("test/corpus", cache_parquet=True, val_documents=2)
+    train, val = open_streaming_datasets(config, CharacterTokenizer(), 19, 2)
+    for _ in range(7):
+        train.next_numpy()
+    state = json.loads(json.dumps(train.state_dict()))
+    restored, restored_val = open_streaming_datasets(
+        config, CharacterTokenizer(), 19, 2, state
+    )
+    assert calls.count("info") == 1
+    assert state["contract"]["source"]["files"] == list(files)
+    for _ in range(20):
+        for a, b in zip(train.next_numpy(), restored.next_numpy()):
+            np.testing.assert_array_equal(a, b)
+    for a, b in zip(val.next_numpy(), restored_val.next_numpy()):
+        np.testing.assert_array_equal(a, b)
+    for loader in (train, restored, val, restored_val):
+        loader.close()
+    for kwargs in (
+        {"name": "other"},
+        {"val_split": "validation"},
+        {"train_split": "test"},
+    ):
+        with pytest.raises(ValueError, match="single train split"):
+            StreamConfig("test/corpus", cache_parquet=True, **kwargs)

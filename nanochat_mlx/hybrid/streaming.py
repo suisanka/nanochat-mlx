@@ -24,6 +24,7 @@ class StreamConfig:
     val_split: str | None = None
     val_documents: int = 1024
     text_column: str = "text"
+    cache_parquet: bool = False
 
     def __post_init__(self):
         if not re.fullmatch(r"[\w.-]+/[\w.-]+", self.dataset):
@@ -39,6 +40,37 @@ class StreamConfig:
                 )
         if self.train_split == self.val_split:
             raise ValueError("Stream train and validation splits must be distinct")
+        if self.cache_parquet and (
+            self.name is not None
+            or self.train_split != "train"
+            or self.val_split is not None
+        ):
+            raise ValueError(
+                "Cached Parquet requires a single train split without a named configuration"
+            )
+
+
+def cached_parquet_documents(files, dataset, revision, text_column):
+    """Download only the current pinned shard; iterate bounded Arrow batches.
+
+    Explicit filenames avoid Hub directory pagination, which some network
+    proxies incorrectly cache without the pagination cursor. HF's iterable
+    dataset still owns shard/example cursors and exact resume semantics.
+    """
+    from huggingface_hub import hf_hub_download, try_to_load_from_cache
+    import pyarrow.parquet as pq
+
+    for filename in files:
+        path = try_to_load_from_cache(
+            dataset, filename, repo_type="dataset", revision=revision
+        )
+        if not isinstance(path, str):
+            path = hf_hub_download(
+                dataset, filename, repo_type="dataset", revision=revision
+            )
+        with pq.ParquetFile(path) as parquet:
+            for batch in parquet.iter_batches(batch_size=256, columns=[text_column]):
+                yield from batch.to_pylist()
 
 
 class StreamingTokenDataset:
@@ -88,6 +120,16 @@ class StreamingTokenDataset:
             for t in tokens
         ):
             raise ValueError("Stream token ID outside vocabulary")
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop("iterator", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.stream.load_state_dict(deepcopy(self.stream_state))
+        self.iterator = iter(self.stream)
 
     def reset(self):
         """Return validation to its fixed initial sample; no network read yet."""
@@ -165,6 +207,8 @@ def open_streaming_datasets(config, tokenizer, sequence_len, batch_size=1, state
     from huggingface_hub import HfApi
 
     request = asdict(config)
+    if not config.cache_parquet:
+        request.pop("cache_parquet")  # Preserve existing stream checkpoint contracts.
     if state is not None:
         if state.get("format") != "nanochat-hf-stream-v1":
             raise ValueError("Resume checkpoint does not contain a streaming loader")
@@ -176,18 +220,38 @@ def open_streaming_datasets(config, tokenizer, sequence_len, batch_size=1, state
             raise ValueError("Resume streaming source or datasets version mismatch")
         revision = source["revision"]
     else:
-        revision = HfApi().dataset_info(config.dataset, revision=config.revision).sha
+        info = HfApi().dataset_info(config.dataset, revision=config.revision)
+        revision = info.sha
         source = {
             "request": request,
             "revision": revision,
             "datasets_version": datasets.__version__,
         }
+        if config.cache_parquet:
+            files = sorted(
+                s.rfilename for s in info.siblings if s.rfilename.endswith(".parquet")
+            )
+            if not files or any("/" in f for f in files):
+                raise ValueError(
+                    "Cached Parquet requires flat, single-split Parquet shards"
+                )
+            source["files"] = files
     if not revision or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError(
             "Streaming dataset must resolve to an immutable Hub commit SHA"
         )
 
     def load(split):
+        if config.cache_parquet:
+            return datasets.IterableDataset.from_generator(
+                cached_parquet_documents,
+                gen_kwargs=dict(
+                    files=source["files"],
+                    dataset=config.dataset,
+                    revision=revision,
+                    text_column=config.text_column,
+                ),
+            )
         return datasets.load_dataset(
             config.dataset,
             name=config.name,
