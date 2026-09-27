@@ -108,7 +108,12 @@ uv run python -m scripts.hybrid_chat \
   --raw --prompt 'Water evaporates when' --temperature 0 --max-tokens 128
 ```
 
-`--raw` is single-prompt continuation with an initial EOS context token and no
-chat framing. Chat mode remains the default. Save prompts, decoding parameters
+Add `--interactive` to `--raw` to load the model once and enter successive,
+independent prompts at `Text:`. Empty inputs are ignored; `exit`, `quit`, or
+Ctrl-D leave the loop. Without `--raw`, interactive chat retains conversation
+history and uses the official chat encoder.
+
+`--raw` uses an initial EOS context token and no chat framing. Chat mode remains
+the default. Save prompts, decoding parameters
 and outputs for comparison after SFT. No 32K execution is required by this local
 evaluation workflow.

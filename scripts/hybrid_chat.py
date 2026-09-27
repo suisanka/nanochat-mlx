@@ -20,7 +20,7 @@ def main(argv=None):
     p.add_argument(
         "--raw",
         action="store_true",
-        help="Base-model continuation without chat framing",
+        help="Base-model continuation without chat framing; each prompt is independent",
     )
     p.add_argument("--thinking-mode", choices=["chat", "thinking"], default="chat")
     p.add_argument("--reasoning-effort", type=int, default=75)
@@ -30,8 +30,6 @@ def main(argv=None):
     p.add_argument("--prefill-chunk-size", type=int, default=256)
     p.add_argument("--memory-limit-gb", type=float, default=8)
     args = p.parse_args(argv)
-    if args.raw and args.interactive:
-        p.error("--raw is a single-prompt base-model continuation")
     from nanochat_mlx.common import set_memory_limit
     from nanochat_mlx.hybrid.checkpoint import load_checkpoint
     from nanochat_mlx.hybrid.engine import HybridEngine
@@ -43,11 +41,29 @@ def main(argv=None):
     model.eval()
     engine = HybridEngine(model, tokenizer)
     messages = []
+    if args.interactive:
+        mode = (
+            "Raw continuation (independent prompts)"
+            if args.raw
+            else "Chat (history retained)"
+        )
+        print(f"{mode}. Type exit or quit to leave; Ctrl-D also exits.")
     while True:
-        prompt = input("You: ") if args.interactive else args.prompt or "Hello."
+        try:
+            prompt = (
+                input("Text: " if args.raw else "You: ")
+                if args.interactive
+                else args.prompt or "Hello."
+            )
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if args.interactive and not prompt.strip():
+            continue
         if prompt.strip().lower() in ("quit", "exit"):
             break
-        messages.append({"role": "user", "content": prompt})
+        if not args.raw:
+            messages.append({"role": "user", "content": prompt})
         tokens = (
             tokenizer.encode(prompt, prepend=tokenizer.contract["eos"])
             if args.raw
@@ -74,6 +90,10 @@ def main(argv=None):
                 last = decoded
         print()
         decoded = tokenizer.decode(output)
+        if args.raw:
+            if not args.interactive:
+                break
+            continue
         if args.thinking_mode == "thinking":
             reasoning, sep, answer = decoded.partition("</think>")
             messages.append(
