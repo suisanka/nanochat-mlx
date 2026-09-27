@@ -281,6 +281,7 @@ def train(args, plan):
                 "lr_multiplier": optimizer.multiplier,
                 "tokens_per_second": training.tokens_per_step
                 / (time.monotonic() - start),
+                "peak_memory_gb": mx.get_peak_memory() / 1024**3,
             }
             if args.diagnostics_every > 0 and (step + 1) % args.diagnostics_every == 0:
                 stats = {}

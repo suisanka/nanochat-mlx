@@ -36,11 +36,19 @@ choices preserve the specified equations and expose numerical correctness paths:
 | Training precision | BF16 model weights, FP32 gate math/recurrent accumulation/optimizer master state | BF16 loss/gradient and checkpoint checks |
 | Activation checkpointing | MLX parameter-aware block checkpointing | Short loss/backward test |
 
-The linear CE implementation fuses the operation boundary and controls logits
-lifetime; it is not FLA's CUDA kernel or a throughput-equivalent replacement.
-Likewise, the GDN chunk implementation uses MLX matrix operations; fused Metal
-kernel tuning is a future performance experiment. No full `[B,T,V]` tensor is
-retained by training loss, and SWA never constructs a full-sequence `T*T` mask.
+GDN's fixed-size chunk step, recurrent decode, linear CE forward/backward tiles
+and Muon Newton–Schulz iterations use `mx.compile`. These JIT kernels are reused
+across chunks and steps. SWA uses MLX's native SDPA. The Python data iterator and
+loss tile orchestration remain outside whole-step compilation.
+
+MLX 0.32 retains graphs inside custom VJPs: `mx.eval` alone does not free earlier
+loss tiles. Forward loss totals are accumulated as host scalars, and evaluated
+FP32 backward tile outputs are copied into graph-free leaves through NumPy.
+Arithmetic remains in JIT GPU kernels; copies cost bandwidth and intentionally
+limit this operation to first-order gradients. A reduced-vocabulary peak-memory
+regression test catches retained logits/weight-gradient chains. This is not
+FLA's CUDA kernel or a throughput-equivalent replacement; dedicated Metal kernel
+tuning remains future work. SWA never constructs a full-sequence `T*T` mask.
 
 At the d12 BF16 anchor, persistent state is approximately 1.5 MiB GDN FP32 state,
 2 MiB SWA KV, plus 72 KiB short-convolution state per sequence. This excludes

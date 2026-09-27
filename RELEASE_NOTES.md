@@ -1,5 +1,14 @@
 # Release notes
 
+## Training memory and JIT kernels
+
+- Release custom-loss tile graphs explicitly: MLX's custom VJP retains graphs
+  even across `eval`, which otherwise causes memory growth at real vocabulary
+  and context sizes. Preserve first-order gradients with bounded tile storage.
+- JIT compile GDN chunk steps, CE forward/backward tiles and Muon Newton–Schulz;
+  recurrent decode already uses JIT. Report MLX peak memory in training metrics.
+- Add a peak-memory regression alongside loss/gradient numerical parity tests.
+
 ## Online dataset streaming
 
 - Added CLI and Web Hugging Face text streaming with online DeepSeek tokenization

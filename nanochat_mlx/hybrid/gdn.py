@@ -37,6 +37,39 @@ def recurrent_decode(q, k, v, g, beta, state):
     return naive_recurrent_gdn(q, k, v, g, beta, state)
 
 
+@mx.compile
+def _chunk_step(q, k, v, g, beta, state):
+    """Compile one fixed-size chunk, reusing its graph across the sequence."""
+    cumulative = mx.cumsum(g, axis=-1)
+    n, dk = q.shape[-2:]
+    positions = mx.arange(n)
+    causal = positions[:, None] >= positions[None, :]
+    strict = positions[:, None] > positions[None, :]
+    # Mask before exp: upper triangle can otherwise overflow for strong decay.
+    decay = mx.exp(
+        mx.where(causal, cumulative[..., :, None] - cumulative[..., None, :], -mx.inf)
+    )
+    lower = mx.where(strict, (k @ k.swapaxes(-1, -2)) * beta[..., :, None] * decay, 0)
+    # (I+lower)^-1 = product_j (I+(-lower)^(2^j)); nilpotent in n steps.
+    power = -lower
+    inverse = mx.broadcast_to(mx.eye(n), lower.shape)
+    for _ in range(math.ceil(math.log2(n)) if n > 1 else 0):
+        inverse = inverse + power @ inverse
+        power = power @ power
+    rhs = beta[..., None] * (v - mx.exp(cumulative)[..., None] * (k @ state))
+    updates = inverse @ rhs
+    scores = (q @ k.swapaxes(-1, -2)) * decay
+    out = (mx.exp(cumulative)[..., None] * (q @ state) + scores @ updates) / math.sqrt(
+        dk
+    )
+    final_decay = mx.exp(cumulative[..., -1, None] - cumulative)
+    state = (
+        state * mx.exp(cumulative[..., -1, None, None])
+        + (k * final_decay[..., None]).swapaxes(-1, -2) @ updates
+    )
+    return out, state
+
+
 def chunk_gated_delta_rule(q, k, v, g, beta, state=None, chunk_size=64):
     q, k, v = (x.astype(mx.float32).transpose(0, 2, 1, 3) for x in (q, k, v))
     g, beta = (x.astype(mx.float32).transpose(0, 2, 1) for x in (g, beta))
@@ -46,40 +79,15 @@ def chunk_gated_delta_rule(q, k, v, g, beta, state=None, chunk_size=64):
     out = []
     for start in range(0, t, chunk_size):
         end = min(start + chunk_size, t)
-        qc, kc, vc = (x[:, :, start:end] for x in (q, k, v))
-        bc = beta[:, :, start:end]
-        cumulative = mx.cumsum(g[:, :, start:end], axis=-1)
-        n = end - start
-        positions = mx.arange(n)
-        causal = positions[:, None] >= positions[None, :]
-        strict = positions[:, None] > positions[None, :]
-        # Mask before exp: upper triangle can otherwise overflow for strong decay.
-        decay = mx.exp(
-            mx.where(
-                causal, cumulative[..., :, None] - cumulative[..., None, :], -mx.inf
-            )
+        result, state = _chunk_step(
+            q[:, :, start:end],
+            k[:, :, start:end],
+            v[:, :, start:end],
+            g[:, :, start:end],
+            beta[:, :, start:end],
+            state,
         )
-        lower = mx.where(
-            strict, (kc @ kc.swapaxes(-1, -2)) * bc[..., :, None] * decay, 0
-        )
-        # (I+lower)^-1 = product_j (I+(-lower)^(2^j)); nilpotent in n steps.
-        power = -lower
-        inverse = mx.broadcast_to(mx.eye(n), lower.shape)
-        for _ in range(math.ceil(math.log2(n)) if n > 1 else 0):
-            inverse = inverse + power @ inverse
-            power = power @ power
-        rhs = bc[..., None] * (vc - mx.exp(cumulative)[..., None] * (kc @ state))
-        updates = inverse @ rhs
-        scores = (qc @ kc.swapaxes(-1, -2)) * decay
-        out.append(
-            (mx.exp(cumulative)[..., None] * (qc @ state) + scores @ updates)
-            / math.sqrt(dk)
-        )
-        final_decay = mx.exp(cumulative[..., -1, None] - cumulative)
-        state = (
-            state * mx.exp(cumulative[..., -1, None, None])
-            + (kc * final_decay[..., None]).swapaxes(-1, -2) @ updates
-        )
+        out.append(result)
     return mx.concatenate(out, axis=2).transpose(0, 2, 1, 3), state
 
 

@@ -149,6 +149,27 @@ def test_fused_loss_and_both_gradients(dtype):
     assert linear_cross_entropy(h, w, mx.full(y.shape, -1), 7).item() == 0
 
 
+def test_linear_ce_releases_tiles_during_autodiff():
+    # A reduced vocabulary reproduces the real 4K failure without allocating
+    # gigabytes: the previous VJP retained >100 MiB for this 16 MiB logits shape.
+    import gc
+
+    gc.collect()
+    h = mx.random.normal((1, 512, 32))
+    w = mx.random.normal((8192, 32))
+    y = mx.zeros((1, 512), dtype=mx.int32)
+    mx.eval(h, w, y)
+    mx.clear_cache()
+    baseline = mx.get_active_memory()
+    mx.reset_peak_memory()
+    loss, grads = mx.value_and_grad(
+        lambda h, w: linear_cross_entropy(h, w, y, 64), argnums=(0, 1)
+    )(h, w)
+    mx.eval(loss, grads)
+    assert mx.isfinite(loss).item()
+    assert mx.get_peak_memory() - baseline < 32 * 1024**2
+
+
 @pytest.mark.parametrize("rope_scaling", ["none", "linear", "yarn"])
 def test_cache_prefill_decode_and_weight_roundtrip(rope_scaling, tmp_path):
     mx.random.seed(27)

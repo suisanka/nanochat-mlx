@@ -9,6 +9,7 @@ import mlx.core as mx
 from mlx.utils import tree_flatten, tree_unflatten
 
 
+@mx.compile
 def newton_schulz(gradient, steps=5):
     x = gradient.astype(mx.float32)
     transposed = x.shape[0] > x.shape[1]
