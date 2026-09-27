@@ -1,0 +1,17 @@
+{
+  "depth": 12,
+  "model": {
+    "architecture": "gdn_swa",
+    "sequence_len": 32768,
+    "max_context": 32768,
+    "checkpoint_blocks": true,
+    "rope_scaling": "none",
+    "rope_factor": 1.0
+  },
+  "training_tokens": 50000000,
+  "data_profile": "32k",
+  "training": {
+    "tokens_per_step": 131072,
+    "optimizer": "muon"
+  }
+}

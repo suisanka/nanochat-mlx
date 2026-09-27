@@ -1,50 +1,30 @@
-# Release Checklist
+# Hybrid architecture verification gates
 
-Use this before creating a Git tag or GitHub release.
+## Code-delivery gate (no training)
 
-## Release Gate
+- Resolve the committed uv.lock and run the short pytest suite on Apple Silicon.
+- Set NANOCHAT_TEST_TOKENIZER to a verified local official V4.1 tokenizer so
+  real tokenizer/data/API cases run rather than skip.
+- Check GDN chunk/reference output, state and gradient parity; local SDPA parity;
+  bounded linear CE/vanilla CE output and both gradients; BF16 behavior;
+  cached decode/full forward; strict checkpoint roundtrip and optimizer grouping.
+- Check all original depths and 4K/32K recipe metadata with dry-run.
+- Check the default CLI and Web plan flow cannot accidentally start training.
+- Confirm there are no old GPT/tokenizer/conversion runtime branches.
+- Do not run training or actual 32K sequences for the current task.
 
-1. Run the automated test suite:
+## Future research gates (require separate authorization)
 
-```bash
-.venv/bin/python -m pytest tests -v
-```
+- Measure actual 32K memory, throughput, gradients and long-prefill execution.
+- Run 4K synthetic validation and then the prepared 32K memory scenarios.
+- Compare the hybrid optimizer recipes with matched data and token budgets.
+  Pure GDN, pure SWA and full-attention comparisons would require a separately
+  authorized extension; those model modes are not available.
+- Record alpha/beta distributions, recurrent state norms, Q/K/V norms, output
+  gates, layer/parameter gradient norms, optimizer update RMS and SWA entropy.
+- Run natural-language smoke training before the 500M-token architecture ranking.
+- Only advance to KDA after stability, LM loss, local recall, long recall,
+  overwrite and hybrid trade-off requirements are demonstrated empirically.
 
-2. Verify the small Apple Silicon path still works inside a clean temporary `NANOCHAT_BASE_DIR`:
-- download at least 2 shards
-- train the tokenizer
-- run a tiny base train
-- run a tiny SFT pass
-- confirm CLI chat works
-- confirm chat eval works
-
-3. Verify the quickstart flow:
-- empty-state errors are short and actionable
-- `/status` reflects real progress instead of guessing
-- model load, chat, and unload work after training or import
-
-4. Verify a real Hugging Face import:
-
-```bash
-python -m scripts.convert_from_hf --repo nanochat-students/base-d20 --memory-limit-gb=8
-```
-
-The release is not ready if any of the following happen:
-- tokenizer training succeeds with fewer than 2 shards
-- train, SFT, chat, or eval fail with raw setup tracebacks instead of plain guidance
-- quickstart marks skipped work as complete
-- converted Hugging Face checkpoints fail verification after import
-
-## Notes For This Repo
-
-- The practical release target is an Apple Silicon laptop with 24 GB of shared memory.
-- The routine smoke path should stay at depth 4 with low memory caps.
-- This repo tracks `karpathy/nanochat` behavior more closely than `karpathy/autoresearch`, so default training and fine-tuning settings should be compared against `nanochat` first.
-
-## Last Verified
-
-Verified on March 24, 2026:
-
-- `29 passed, 1 skipped` on `.venv/bin/python -m pytest tests -v`
-- real Hugging Face import succeeded for `nanochat-students/base-d20`
-- tiny local base-train, SFT, chat, eval, and quickstart smoke tests all passed within the small-machine target
+Passing code checks does not close research gates. No trained checkpoint or
+32K quality/performance claim is part of this migration.

@@ -1,25 +1,19 @@
-# Release Notes
+# Release notes
 
-## March 24, 2026
+## Hybrid architecture migration
 
-This release is focused on making `nanochat-mlx` safer to run, easier to recover from setup mistakes, and more dependable on a 24 GB Apple Silicon laptop.
+- Replaced the previous GPT implementation with the GDN/SWA research backbone.
+- Preserved depth presets; d12 matches the 109,819,488-parameter v0 design.
+- Pinned the official DeepSeek V4.1 tokenizer and Python prompt encoder.
+- Added local-aware tiled attention, chunked GDN and recurrent decode, bounded
+  linear cross entropy, tied embedding, SwiGLU and FP32 optimizer/master state.
+- Added uint32 datasets, assistant supervision masks, complete versioned
+  checkpoints, 4K/32K memory preparation, an AdamW optimizer control and Web/CLI tooling.
+- Restricted all model configuration and execution to the GDN/SWA hybrid architecture.
+- Removed old GPT/BPE training/checkpoint import modes and their dependencies.
+- Training commands default to inspection and require --start-training to run.
 
-### What improved
-
-- Setup problems now fail with short, plain guidance instead of raw tracebacks.
-- Tokenizer training now refuses to run unless there is enough downloaded data to create both training and validation splits.
-- Training, fine-tuning, chat, and eval now check their prerequisites before starting.
-- The quickstart web flow now blocks impossible steps, reports errors more clearly, and keeps its progress display in sync with the real backend state.
-- Hugging Face import now has a friendlier failure path when optional conversion dependencies are missing, and `--help` works without the full conversion stack installed.
-- The default training ratio was updated to match current upstream `nanochat`.
-- Training now stops immediately if the loss becomes invalid or obviously blows up.
-
-### Validation
-
-- Automated test suite: `29 passed, 1 skipped`
-- Real Hugging Face import verified with `nanochat-students/base-d20`
-- Tiny end-to-end local runs verified for tokenizer, base training, fine-tuning, chat, eval, and quickstart
-
-### Practical target
-
-The release gate for this repo is a small Apple Silicon machine with 24 GB of shared memory. The routine smoke path should stay on the small depth-4 configuration with low memory caps.
+The old March 2026 release's `29 passed, 1 skipped` and imported base-d20 evidence
+apply to the removed architecture. They do not validate this implementation.
+Current verification is short-sequence and untrained; no training run or actual
+32K long-sequence validation was performed for this migration.

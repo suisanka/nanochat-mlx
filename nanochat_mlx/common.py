@@ -4,7 +4,6 @@ Common utilities for nanochat MLX.
 
 import os
 import sys
-import mlx.core as mx
 
 
 class SetupError(RuntimeError):
@@ -35,6 +34,7 @@ def get_base_dir():
 
 def set_memory_limit(gb=16):
     """Cap MLX Metal memory usage."""
+    import mlx.core as mx
     limit = int(gb * 1024**3)
     try:
         mx.set_memory_limit(limit)
@@ -45,6 +45,7 @@ def set_memory_limit(gb=16):
 
 def get_active_memory_mb():
     """Get current MLX Metal memory usage in MB."""
+    import mlx.core as mx
     try:
         return mx.get_active_memory() / 1024**2
     except AttributeError:
@@ -56,6 +57,7 @@ def get_active_memory_mb():
 
 def get_peak_memory_mb():
     """Get peak MLX Metal memory usage in MB."""
+    import mlx.core as mx
     try:
         return mx.get_peak_memory() / 1024**2
     except AttributeError:

@@ -1,180 +1,146 @@
-# nanochat-mlx
+# nanochat-mlx — Gated DeltaNet + SWA
 
-Train your own ChatGPT on Apple Silicon. Minimal MLX port of [Karpathy's nanochat](https://github.com/karpathy/nanochat).
+A single-device MLX research language model for Apple Silicon. The default backbone is **GDN → GDN → sliding-window attention**, with dense SwiGLU, tied embeddings, the official **DeepSeek V4.1 tokenizer and prompt encoder**, and Muon plus auxiliary AdamW.
 
-## Why I Built This
+Only the GDN/SWA hybrid architecture is supported. The old GPT architecture, BPE training, and checkpoint converter have been removed. Existing old-format checkpoints are not hybrid checkpoints. The AdamW-only recipe provides an optimizer control for the same hybrid model.
 
-I wanted to train a chatbot from scratch on my MacBook without touching PyTorch or a cloud GPU. This is a full MLX port of Karpathy's nanochat — one `--depth` dial controls everything from model size to training duration. The whole pipeline runs on Apple Silicon: data download, tokenizer training, pretraining, fine-tuning, and chat.
+**Current scope:** architecture implementation, short numerical correctness checks, 4K and 32K training recipes, data preparation, and inference plumbing. No model has been trained as part of this migration. 32K is an engineering/configuration limit; actual 32K execution, memory/performance, and learned long-context ability are not validated.
 
-Check out my [personal site](https://casella.dev) for more projects and research.
-
-## What is this?
-
-A self-contained MLX port of nanochat that runs entirely on Apple Silicon. One complexity dial (`--depth`) controls everything: model size, learning rate, batch size, and training duration. The full pipeline goes from raw data download to a working chatbot -- no PyTorch required.
-
-- Single complexity dial: `--depth` sets all hyperparameters automatically
-- Full pipeline: data download, tokenizer training, pretraining, SFT, chat, evaluation
-- Web GUI wizard: `uv run python -m scripts.quickstart` walks you through everything
-- No PyTorch dependency (unless importing pretrained checkpoints)
-
-## Quick Start
-
-Use either `uv run` for each command, or activate the virtual environment once.
-
-### Option 1: `uv run` (no shell activation)
+## Setup
 
 ```bash
-git clone https://github.com/scasella/nanochat-mlx.git
-cd nanochat-mlx
-uv sync
-uv run python -m scripts.quickstart
+uv sync --python 3.13
 ```
 
-### Option 2: activate `.venv`
+Python >=3.10 and MLX >=0.32.2 are declared; the checked environment uses Python 3.13 and MLX 0.32.2. Metal access requires a usable Apple Silicon GPU session. `uv.lock` pins the dependency resolution. PyTorch, RustBPE, tiktoken and Transformers are not required.
+
+Inspect the frozen v0 configuration without loading a model, downloading data, or training:
 
 ```bash
-git clone https://github.com/scasella/nanochat-mlx.git
-cd nanochat-mlx
-uv sync
-source .venv/bin/activate
-python -m scripts.quickstart
-```
-
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000) in your browser. The wizard walks you through downloading data, training a tokenizer, training a model, and chatting with it.
-
-For the rest of the README, use the command style that matches your setup: keep `uv run python -m ...` without shell activation, or drop `uv run` after activating `.venv`.
-
-## Import a Pretrained Model
-
-Skip training entirely by importing a pretrained model from HuggingFace:
-
-```bash
-uv sync --extra convert   # Adds torch dependency for checkpoint conversion
-uv run python -m scripts.convert_from_hf --repo nanochat-students/base-d20
-```
-
-If `.venv` is activated, you can run the same command as `python -m scripts.convert_from_hf --repo nanochat-students/base-d20`.
-
-Or use the GUI: run `uv run python -m scripts.quickstart` or `python -m scripts.quickstart` from an activated `.venv`, then click "Import from HuggingFace" in the training step.
-
-## Full Pipeline (CLI)
-
-Run each step manually for full control:
-
-The examples in this section assume `.venv` is activated. If you are not activating the environment, prefix each `python -m ...` command with `uv run`.
-
-```bash
-# 1. Download data (minimum 2 shards so train/val split exists)
-python -m nanochat_mlx.dataset -n 2
-
-# 2. Train BPE tokenizer (vocab size 32768)
-python -m scripts.tok_train
-
-# 3. Train base model (depth=4 for a quick test)
-python -m scripts.train --depth=4
-
-# 4. Supervised fine-tuning
-python -m scripts.sft --depth=4
-
-# 5. Chat with your model
-python -m scripts.chat --depth=4 --source=sft --interactive
-
-# 6. Evaluate
-python -m scripts.chat_eval --depth=4
-```
-
-Or run everything at once with the quickstart script:
-
-```bash
+uv run python -m scripts.train --depth 12 --dry-run
+uv run python -m scripts.train --depth 4 --recipe configs/gdn_swa_32k_memory.json --dry-run
 bash runs/quickstart.sh
 ```
 
-Without activating `.venv`, run that script as `uv run bash runs/quickstart.sh`.
+Training only executes with **`--start-training`**. Omitting that switch prints a plan.
 
-## The Depth Dial
+## Depth presets
 
-The `--depth` parameter is the single complexity dial. All other hyperparameters (width, heads, batch size, learning rate, training tokens) are auto-computed from depth via scaling laws.
+The original depth choices remain available. Width now follows the new architecture: `256 × ceil(depth / 6)`, FFN width is `3 × hidden`, and GDN Q/K width is `0.75 × hidden`. The 12-layer preset exactly matches the referenced 110M design. The GDN/GDN/SWA pattern is tiled and truncated for depths not divisible by three.
 
-| Depth | Params | Time (M3 Pro) | Use case |
-|-------|--------|---------------|----------|
-| 4 | ~5M | ~1 min | Quick test, debugging |
-| 12 | ~125M | ~1 hour | Reasonable quality |
-| 20 | ~350M | ~8 hours | Good quality |
-| 26 | ~600M | ~24 hours | GPT-2 reproduction |
+| Depth | Hidden | GDN heads | SWA Q/KV heads | SWA head dimension | GDN/SWA layers | Total parameters |
+|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 256 | 3 | 4 / 1 | 64 | 3 / 1 | 36,814,994 |
+| 12 | 512 | 6 | 4 / 1 | 128 | 8 / 4 | 109,819,488 |
+| 20 | 1024 | 12 | 8 / 2 | 128 | 14 / 6 | 425,495,632 |
+| 26 | 1280 | 15 | 20 / 5 | 64 | 18 / 8 | 759,617,564 |
 
-The "miniseries principle" requires any architectural change to work across all depths.
+These are exact counts from parameter shapes, not speed or memory benchmarks. The 64-dimensional attention heads at d4/d26 preserve 4:1 GQA while keeping projected attention width equal to hidden width.
 
-## Which Mac should I use?
-
-These are practical starting points for people arriving with hardware-compatibility questions first. Actual runtime depends on thermals, data shards, background memory pressure, and whether you are training from scratch or importing a checkpoint.
-
-| Mac | Expected depth | Expected time | Known caveats |
-|-----|----------------|---------------|---------------|
-| M1 with 8 GB unified memory | Depth 4 | Minutes | Best for smoke tests, debugging, and proving the pipeline works. Keep shard counts low. |
-| M1/M2 with 16 GB unified memory | Depth 12 | About 1-2 hours | Good starter path for a real run. Close memory-heavy apps before training. |
-| M3/M4 with 24 GB unified memory | Depth 12 comfortably; depth 20 as an overnight run | About 1 hour at depth 12; many hours at depth 20 | Use depth 4 first, then scale. Depth 20 may need smaller batches or fewer competing apps. |
-| 32 GB+ Apple Silicon | Depth 20+ | About 8 hours at depth 20; roughly a day at depth 26 | Best fit for full-quality local experiments. Depth 26 is still a long run. |
-
-## Hardware Requirements
-
-Apple Silicon is required (M1, M2, M3, M4 -- any variant).
-
-Recommended RAM by depth:
-
-- **8 GB** -- depth 4 (quick tests and debugging)
-- **16 GB** -- depth 12 (reasonable quality training)
-- **32 GB+** -- depth 20 and above (good to full quality)
-
-For a 24 GB Apple Silicon laptop, the recommended smoke-test path is depth 4 with low memory caps and 2-4 shards.
-
-## Related Apple Silicon ML projects
-
-- [gemma4-m4-pro](https://github.com/scasella/gemma4-m4-pro) — Gemma 4 on a 24GB MacBook: measured recipes, runtimes, and fallback paths.
-- [train-gemma4-sudoku-on-your-macbook](https://github.com/scasella/train-gemma4-sudoku-on-your-macbook) — One-notebook Gemma 4 RL on Apple Silicon.
-- [ttt-discover-autoresearch-mlx](https://github.com/scasella/ttt-discover-autoresearch-mlx) — Run RL-driven autoresearch on Apple Silicon.
-- [autoresearch-evo](https://github.com/scasella/autoresearch-evo) — Novelty-search-inspired autonomous research loops, run memory, and agentic review.
-
-## Project Structure
-
-```
-nanochat_mlx/          Core MLX modules
-  gpt.py               GPT transformer model
-  optim.py             Muon+AdamW optimizer
-  engine.py            Inference with KV cache
-  train.py             Training loop
-  sft.py               SFT pipeline
-  eval.py              BPB evaluation
-  dataloader.py        BOS-aligned best-fit packing
-  sft_dataloader.py    SFT conversation packing
-  dataset.py           Data download and iteration
-  tokenizer.py         BPE tokenizer
-  common.py            Memory management, utilities
-scripts/               Entry points
-  quickstart.py        Web GUI wizard
-  train.py             Training CLI
-  sft.py               SFT CLI
-  chat.py              Chat CLI
-  chat_eval.py         Evaluation CLI
-  tok_train.py         Tokenizer training
-  convert_from_hf.py   HuggingFace checkpoint import
-tasks/                 Eval tasks (ARC, MMLU, GSM8K, etc.)
-tests/                 Test suite
-runs/                  Shell scripts
-```
-
-## Tests
-
-With `.venv` activated:
+## Official tokenizer and chat format
 
 ```bash
-python -m pytest tests/ -v                    # All tests
-python -m pytest tests/ -v -m "not slow"      # Skip slow tests
+uv run python -m scripts.prepare_hybrid --install-tokenizer
 ```
 
-Without activating `.venv`, prefix those commands with `uv run`.
+Only tokenizer artifacts are downloaded, not DeepSeek model weights. The pinned upstream revision is `dba1be0a40aa45a94ad051997016db3960a90277` in `deepseek-ai/DeepSeek-V4.1-Flash`. Vocabulary is 129,280, BOS/EOS/PAD IDs are 0/1/2. The model's padding ID is used; upstream `tokenizer_config.json` aliases its pad token to EOS, while model config and tokenizer ID 2 identify the dedicated pad token.
 
-Tests use mock classes to avoid loading real models. MLX-specific tests are skipped when `mlx` is not installed.
+V4.1 publishes a Python prompt encoder rather than a Jinja template. Its unmodified official implementation is vendored with its MIT license in `nanochat_mlx/hybrid/vendor/`. SFT, CLI chat and Web chat share that encoder: system messages, non-thinking/thinking mode, numeric reasoning effort, and V4.1 DSML tool messages retain the upstream format. This model has no vision encoder and rejects image inputs. Encoding tool calls does not execute tools.
+
+Tokenizer and prompt-encoder SHA-256 fingerprints are recorded in prepared data and checkpoints. Mismatches fail before loading/resuming. Ordinary pretraining encodes documents with EOS separators and no chat template.
+
+## Prepare data without training
+
+Use a new output directory for every prepared dataset. Files are little-endian **uint32**, with separate train/validation splits and content fingerprints.
+
+```bash
+# Plain text: one document per line; explicitly separated train and validation files.
+uv run python -m scripts.prepare_hybrid \
+  --train-text /absolute/path/train.txt --val-text /absolute/path/val.txt \
+  --output /absolute/path/text-data
+
+# Optional FineWeb download. The last sorted shard becomes validation.
+uv run python -m nanochat_mlx.dataset -n 2
+uv run python -m scripts.prepare_hybrid \
+  --parquet-dir "$HOME/.cache/nanochat/base_data" --output /absolute/path/fineweb-data
+
+# Official-template conversations: JSONL objects containing messages, or message arrays.
+uv run python -m scripts.prepare_hybrid \
+  --train-chat /absolute/path/train.jsonl --val-chat /absolute/path/val.jsonl \
+  --context-length 4096 --output /absolute/path/sft-data
+
+# Synthetic memory data; this command prepares records, not a trained model.
+uv run python -m scripts.prepare_hybrid --synthetic 32k \
+  --output /absolute/path/memory-32k
+```
+
+Conversation training preserves assistant-only masks, including exclusion of external tool results. Complete conversations are packed; oversized conversations fail explicitly. Samples start with zero GDN/conv/cache state. EOS inside a packed sample does not reset state.
+
+The 32K memory profile covers local/boundary recall; gaps of 4K, 8K, 16K, 24K and 30K; distributed overwrite updates; 4–128 keys; parity, state transitions, counters, stack-like dependencies and exact strings. Inputs use the official non-thinking chat framing, with answer-only targets. Every record logs its actual token gap, answer boundary, key count and expected answer. Train/validation use disjoint seeds. See [32K training scenarios](docs/long_context_training.md).
+
+## Training recipes (prepared, not executed)
+
+- `configs/gdn_swa_4k.json`: frozen hybrid backbone, natural-language validation recipe.
+- `configs/gdn_swa_4k_memory.json`: 4K synthetic memory recipe.
+- `configs/gdn_swa_32k_memory.json`: 32K memory training, 131,072 tokens/step, block checkpointing.
+- `configs/gdn_swa_4k_adamw_control.json`: AdamW-only optimizer control.
+
+For a future authorized run, add `--start-training` to an inspected command:
+
+```bash
+uv run python -m scripts.train --recipe configs/gdn_swa_4k.json \
+  --depth 12 --data-dir /absolute/path/text-data --dry-run
+
+# Weight warm-start for the 32K phase; optimizer starts fresh.
+uv run python -m scripts.train --recipe configs/gdn_swa_32k_memory.json \
+  --data-dir /absolute/path/memory-32k \
+  --init-from /absolute/path/base-checkpoint.json \
+  --output-dir /absolute/path/32k-run --dry-run
+
+# SFT requires an initial checkpoint or a complete resume checkpoint.
+uv run python -m scripts.sft --depth 12 --data-dir /absolute/path/sft-data \
+  --init-from /absolute/path/base-checkpoint.json --dry-run
+```
+
+`--resume` restores model, FP32 optimizer/master state and the exact mmap cursor; configuration, dataset fingerprints, total steps and micro-batch size must match. `--init-from` is a new training phase, permits compatible context changes, and uses a fresh optimizer. Checkpoints are written under `hybrid_checkpoints/<architecture>/d<depth>/<base|sft>/`. Metadata is published last so incomplete saves are not discoverable. Previous checkpoints are retained.
+
+## 32K context engineering
+
+The baseline training context remains 4K and the maximum supported configuration is 32,768 tokens. SWA keeps a 1,024-token window and absolute positions after eviction. GDN has no positional embedding. Prefill is chunked; intermediate prefill chunks do not project a full vocabulary tensor. GDN uses FP32 recurrent accumulation, so its cache is larger than the design document's hypothetical BF16-state budget but remains independent of sequence length.
+
+Native RoPE (`theta=10000`) remains the default: SWA's local distance range is unchanged at 32K. Optional fixed linear or YaRN scaling is serialized in checkpoints, e.g. `--rope-scaling linear --rope-factor 8`. Frequencies do not change mid-generation, preventing stale cached-key bases. These options are capabilities, not measured quality recommendations.
+
+## Chat and evaluation
+
+```bash
+uv run python -m scripts.chat --checkpoint /absolute/path/checkpoint.json --interactive
+uv run python -m scripts.chat --checkpoint /absolute/path/checkpoint.json \
+  --thinking-mode thinking --reasoning-effort 75 -p "Explain the result."
+
+uv run python -m scripts.chat_eval --checkpoint /absolute/path/checkpoint.json \
+  --tokenizer-dir "$HOME/.cache/nanochat/deepseek_tokenizer" -a 'GSM8K|MMLU'
+
+uv run python -m scripts.hybrid_eval --checkpoint /absolute/path/checkpoint.json \
+  --tokenizer-dir "$HOME/.cache/nanochat/deepseek_tokenizer" \
+  --data-dir /absolute/path/memory-data --output /absolute/path/results.json
+
+uv run python -m scripts.quickstart
+```
+
+The local Web workbench defaults to `http://127.0.0.1:8000`: inspect depth/context, install tokenizer, prepare data, inspect training plans, load hybrid checkpoints and stream chat. Its training checkbox is off by default. No old-model import mode remains.
+
+## Verification
+
+```bash
+# Install tokenizer first, then enable real-tokenizer adapter/data/API checks.
+NANOCHAT_TEST_TOKENIZER="$HOME/.cache/nanochat/deepseek_tokenizer" \
+  uv run python -m pytest tests -v
+```
+
+Without `NANOCHAT_TEST_TOKENIZER`, tokenizer-dependent checks skip explicitly; tests never download it automatically. Tests include official DeepSeek golden cases, GDN output/state/gradient parity at short lengths, local attention parity, bounded loss and both gradients, BF16 behavior, decode/cache parity, serialization, optimizer grouping and synthetic update equations, mmap resume, conversation masks and API chat with a tiny untrained model. They do **not** run training loops or actual 32K sequences.
+
+See [architecture and validation boundaries](docs/architecture.md) and [release checklist](RELEASE_CHECKLIST.md). The project is an implementation for research; learned retrieval, architecture ranking, throughput and training stability require future experiments.
 
 ## Attribution
 
-This is a community MLX port of [Karpathy's nanochat](https://github.com/karpathy/nanochat), focused on making the MLX pipeline standalone and easy to use on Apple Silicon. All credit for the original architecture, training recipes, and scaling law insights goes to the nanochat project and its contributors.
+Originally based on Karpathy's nanochat MLX port. The new design follows the referenced GDN/SWA architecture, the [FLA Gated DeltaNet implementation](https://github.com/fla-org/flash-linear-attention), [Keller Jordan's Muon](https://github.com/KellerJordan/Muon), [MLX](https://github.com/ml-explore/mlx), and [DeepSeek V4.1's official prompt encoding](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/tree/dba1be0a40aa45a94ad051997016db3960a90277/encoding). Third-party license notices are retained under `nanochat_mlx/hybrid/vendor/`.

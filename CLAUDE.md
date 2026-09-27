@@ -1,78 +1,36 @@
-# CLAUDE.md
+# Project instructions
 
-## Project Overview
+This repository now has one model implementation stack: `nanochat_mlx/hybrid/`.
+Only the GDN/GDN/SWA hybrid architecture is supported. The AdamW-only recipe
+changes the optimizer, not the model architecture. Do not reintroduce the removed GPT,
+RustBPE tokenizer training or old Hugging Face checkpoint conversion path.
 
-nanochat-mlx is a self-contained MLX port of Karpathy's nanochat for Apple Silicon. Full pipeline from data download to chat, no PyTorch required.
+Use `uv` and `uv.lock`. MLX 0.32.2 or later is required. The official DeepSeek
+V4.1 tokenizer and Python prompt encoder are pinned to the same upstream revision;
+never silently substitute a V4/V3/Qwen/Jinja template. Preserve upstream vendor
+code byte-for-byte and keep its MIT license/provenance. Text-only model inputs
+must reject image content.
 
-## Setup
+Preserve all depth presets (4, 12, 20, 26) and the canonical d12/512/1536 v0.
+Baseline training context is 4K; configured maximum is 32K. GDN is NoPE; SWA
+has local attention and cache-safe RoPE. Do not build dense T*T masks for SWA or
+full B*T*V training logits. Keep the optimizer memory controllers out of Muon.
 
-```bash
-uv sync                       # Install dependencies
-source .venv/bin/activate
-```
+Training is explicit (`--start-training`). The current user requested code and
+recipes without starting training or actual long-context tests. Do not run
+training as part of verification. Short forward/gradient checks and synthetic
+optimizer equation checks are allowed. Do not claim learned long-context ability
+from those tests or from a dry-run.
 
-Python 3.10+. Package manager is `uv` (not pip).
-
-## Common Commands
-
-```bash
-# Quick start (web GUI wizard)
-python -m scripts.quickstart
-
-# Data
-python -m nanochat_mlx.dataset -n 8
-
-# Tokenizer
-python -m scripts.tok_train
-
-# Training
-python -m scripts.train --depth=4
-python -m scripts.train --depth=12 --num-iterations=200
-
-# SFT
-python -m scripts.sft --depth=12
-
-# Chat
-python -m scripts.chat --depth=12 --source=sft --interactive
-
-# Evaluation
-python -m scripts.chat_eval --depth=12
-
-# Import from HuggingFace (requires: uv sync --extra convert)
-python -m scripts.convert_from_hf --repo nanochat-students/base-d20
-```
-
-## Tests
+Commands:
 
 ```bash
-python -m pytest tests/ -v
+uv sync --python 3.13
+uv run python -m scripts.train --depth 12 --dry-run
+uv run python -m scripts.train --recipe configs/gdn_swa_32k_memory.json --dry-run
+NANOCHAT_TEST_TOKENIZER=/absolute/path/tokenizer uv run python -m pytest tests -v
 ```
 
-## Architecture
-
-Single complexity dial: `--depth` controls everything. Width, heads, batch size, LR, training tokens all auto-computed.
-
-### Key Modules (nanochat_mlx/)
-
-- **gpt.py**: GPT transformer (RoPE, QK-norm, ReLU², GQA, sliding window, logit softcap, value embeddings, per-layer residual scaling)
-- **optim.py**: Muon+AdamW multi-optimizer
-- **engine.py**: Inference with KV cache, calculator tool use
-- **dataloader.py**: BOS-aligned best-fit packing
-- **sft_dataloader.py**: SFT conversation packing
-- **train.py**: Training loop with gradient accumulation, checkpointing, resume
-- **sft.py**: SFT pipeline
-- **eval.py**: BPB evaluation
-- **common.py**: Memory management, utilities
-- **dataset.py**: Data download and iteration
-- **tokenizer.py**: BPE tokenizer (RustBPE + tiktoken)
-
-### Key Patterns
-
-- **Explicit `mx.eval()` after every micro-batch**: Prevents computation graph buildup
-- **No meta device**: MLX parameters are lazy by default
-- **Manual weight loading**: `_load_weights_into_model()` walks model tree via getattr/setattr
-- **Memory management**: `set_memory_limit(gb)` caps Metal memory
-
-## Artifacts
-
-Stored under `~/.cache/nanochat/`: data shards, tokenizer, MLX checkpoints (`mlx_checkpoints/d{depth}/`).
+Source modules own separate responsibilities: config, model, GDN, local attention,
+RoPE, loss, optimizer, tokenizer, mmap data, scenarios, checkpoint, engine and
+training. CLI adapters stay under `scripts/`; no CUDA/PyTorch runtime dependency.
