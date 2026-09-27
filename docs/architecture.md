@@ -73,6 +73,14 @@ rejects oversized records, preventing non-progressing padding loops.
 
 No state is carried between training samples. There is no EOS reset inside a
 packed sample. Resumption tracks mmap cursor/epoch and data fingerprint exactly.
+The optional online text loader pins a Hugging Face dataset commit and preserves
+source order. It stores HF iteration state, epoch, unconsumed token buffer,
+tokenizer/source/context/batch contract and datasets version. Validation either
+uses a distinct split or holds out a fixed document prefix from training. Local
+parquet tests check cross-shard, mid-document and epoch-boundary resume against
+the mmap token sequence; online text uses the same EOS packing. SFT and synthetic
+tasks retain prepared record/mask data. A remote stream may buffer file blocks or
+row groups; this is not a zero-cache or latency-free promise.
 Checkpoints serialize all architecture, context/RoPE, optimizer, tokenizer and
 loader settings. Model tensors load strictly. Optimizer state includes master
 weights, moments and step; missing or mismatched state fails closed. Metadata is

@@ -190,6 +190,9 @@ class TokenDataset:
             sequence_len=self.T,
         )
 
+    def reset(self):
+        self.cursor, self.epoch = 0, 0
+
     def next_numpy(self):
         rows, targets = [], []
         for _ in range(self.B):

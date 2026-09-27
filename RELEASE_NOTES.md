@@ -1,5 +1,15 @@
 # Release notes
 
+## Online dataset streaming
+
+- Added CLI and Web Hugging Face text streaming with online DeepSeek tokenization
+  and EOS packing; full corpus download / `.bin` preparation is optional.
+- Pin dataset commits, isolate validation documents, and preserve iterator state
+  plus unconsumed tokens for deterministic resume without HF shuffle buffers.
+- Keep offline dry-run and prepared mmap/SFT/synthetic data paths.
+- Validate with tiny local parquet corpora and a bounded remote data read;
+  no training loop or actual 32K sequence is part of verification.
+
 ## Hybrid architecture migration
 
 - Replaced the previous GPT implementation with the GDN/SWA research backbone.

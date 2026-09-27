@@ -89,6 +89,13 @@ class JobRequest(BaseModel):
     depth: int = Field(default=12, ge=1)
     context: int = Field(default=4096, ge=1, le=32768)
     data_dir: str | None = None
+    stream_dataset: str | None = None
+    stream_name: str | None = None
+    stream_revision: str | None = None
+    stream_train_split: str = "train"
+    stream_val_split: str | None = None
+    stream_val_documents: int = Field(default=1024, gt=0)
+    stream_text_column: str = "text"
     output_dir: str | None = None
     train_text: str | None = None
     val_text: str | None = None
@@ -146,8 +153,22 @@ def job_command(req):
             cmd += ["--synthetic", req.profile]
         return cmd
     if req.stage in ("train", "sft"):
-        if req.execute and not req.data_dir:
-            raise ValueError("data_dir is required for training")
+        if req.execute and not (req.data_dir or req.stream_dataset):
+            raise ValueError("data_dir or stream_dataset is required for training")
+        if req.stream_dataset:
+            from nanochat_mlx.hybrid.streaming import StreamConfig
+
+            if req.data_dir or req.stage == "sft":
+                raise ValueError("Streaming text requires pretraining without data_dir")
+            StreamConfig(
+                dataset=req.stream_dataset,
+                name=req.stream_name,
+                revision=req.stream_revision,
+                train_split=req.stream_train_split,
+                val_split=req.stream_val_split,
+                val_documents=req.stream_val_documents,
+                text_column=req.stream_text_column,
+            )
         if req.stage == "sft" and not req.init_from:
             raise ValueError("SFT requires an init_from checkpoint")
         cmd = [
@@ -168,6 +189,19 @@ def job_command(req):
         ]
         if req.data_dir:
             cmd += ["--data-dir", req.data_dir]
+        if req.stream_dataset:
+            for field in (
+                "dataset",
+                "name",
+                "revision",
+                "train_split",
+                "val_split",
+                "val_documents",
+                "text_column",
+            ):
+                value = getattr(req, "stream_" + field)
+                if value is not None:
+                    cmd += ["--stream-" + field.replace("_", "-"), str(value)]
         if req.init_from:
             cmd += ["--init-from", req.init_from]
         if req.iterations:

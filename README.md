@@ -51,6 +51,11 @@ Tokenizer and prompt-encoder SHA-256 fingerprints are recorded in prepared data 
 
 ## Prepare data without training
 
+Local prepared datasets use memory mapping during training, so they are not
+loaded entirely into RAM. Preparation processes documents incrementally, but
+completes the token files before training starts. To begin reading directly from
+the Hub without that preparation step, use the streaming option below.
+
 Use a new output directory for every prepared dataset. Files are little-endian **uint32**, with separate train/validation splits and content fingerprints.
 
 ```bash
@@ -78,6 +83,51 @@ Conversation training preserves assistant-only masks, including exclusion of ext
 
 The 32K memory profile covers local/boundary recall; gaps of 4K, 8K, 16K, 24K and 30K; distributed overwrite updates; 4–128 keys; parity, state transitions, counters, stack-like dependencies and exact strings. Inputs use the official non-thinking chat framing, with answer-only targets. Every record logs its actual token gap, answer boundary, key count and expected answer. Train/validation use disjoint seeds. See [32K training scenarios](docs/long_context_training.md).
 
+## Stream text directly from Hugging Face
+
+Install the tokenizer once, then select `--stream-dataset` instead of
+`--data-dir`. No full parquet download or prepared `.bin` files are required:
+
+```bash
+uv run python -m scripts.prepare_hybrid --install-tokenizer
+
+# Inspection is offline: no Hub resolution, dataset loading or training.
+uv run python -m scripts.train --recipe configs/gdn_swa_4k.json \
+  --depth 4 --stream-dataset karpathy/fineweb-edu-100b-shuffle \
+  --stream-val-documents 1024 \
+  --output-dir "$HOME/.cache/nanochat/runs/stream-d4" --dry-run
+```
+
+To execute, replace `--dry-run` with `--start-training`. Documents are tokenized
+on demand with the pinned DeepSeek tokenizer, followed by EOS, and packed into
+the same overlapping input/target sequences as the mmap loader. Working memory
+depends on the batch, largest document and HF file/row-group buffers, not total
+corpus size. Network access and online tokenization affect throughput. Streaming
+still reads remote bytes and may cache metadata/file blocks locally.
+
+- `--stream-name`: dataset configuration, if required by the repository.
+- `--stream-text-column`: text field (default `text`).
+- `--stream-train-split`: training split (default `train`).
+- `--stream-val-split`: distinct validation split, if available. Otherwise the
+  first `--stream-val-documents` documents (default 1024) are reserved for
+  validation and skipped by training. These are document counts, not token counts.
+- `--stream-revision`: optional Hub revision. Startup resolves it to an immutable
+  commit and prints the pinned source; checkpoints retain that commit.
+
+Use `--resume` with the same streaming flags and training settings. Resume uses
+the saved commit even if the Hub branch has moved, checks the tokenizer/source/
+context/batch and `datasets` version, and restores both HF iteration state and
+unconsumed tokens. Reading part of the current shard again may be necessary.
+Source order is preserved: HF shuffle buffers are deliberately not used because
+their contents are lost on resume. Prefer a source already shuffled when needed.
+Empty/too-short splits and missing/non-string text fields fail explicitly.
+
+This path is for ordinary text pretraining at the configured context length,
+including 32K. Synthetic memory recipes and chat SFT still use prepared datasets
+to preserve record boundaries and assistant-only masks. The Web workbench offers
+the same entry under **Training data → Hugging Face streaming text**. The loader
+uses the official [HF streaming and checkpoint APIs](https://huggingface.co/docs/datasets/stream).
+
 ## Training recipes (prepared, not executed)
 
 - `configs/gdn_swa_4k.json`: frozen hybrid backbone, natural-language validation recipe.
@@ -102,7 +152,7 @@ uv run python -m scripts.sft --depth 12 --data-dir /absolute/path/sft-data \
   --init-from /absolute/path/base-checkpoint.json --dry-run
 ```
 
-`--resume` restores model, FP32 optimizer/master state and the exact mmap cursor; configuration, dataset fingerprints, total steps and micro-batch size must match. `--init-from` is a new training phase, permits compatible context changes, and uses a fresh optimizer. Checkpoints are written under `hybrid_checkpoints/<architecture>/d<depth>/<base|sft>/`. Metadata is published last so incomplete saves are not discoverable. Previous checkpoints are retained.
+`--resume` restores model, FP32 optimizer/master state and the data-loader position (mmap cursor or streaming iterator plus pending tokens); configuration, dataset identity, total steps and micro-batch size must match. `--init-from` is a new training phase, permits compatible context changes, and uses a fresh optimizer. Checkpoints are written under `hybrid_checkpoints/<architecture>/d<depth>/<base|sft>/`. Metadata is published last so incomplete saves are not discoverable. Previous checkpoints are retained.
 
 ## 32K context engineering
 

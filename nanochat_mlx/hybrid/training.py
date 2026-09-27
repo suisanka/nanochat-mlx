@@ -1,7 +1,8 @@
 """Hybrid training entry point. Inspection is the default; execution is explicit."""
 
 import argparse
-from dataclasses import asdict, replace
+from contextlib import ExitStack
+from dataclasses import asdict
 import json
 import math
 import os
@@ -26,6 +27,20 @@ def build_parser():
     p.add_argument("--rope-scaling", choices=["none", "linear", "yarn"], default=None)
     p.add_argument("--rope-factor", type=float, default=None)
     p.add_argument("--data-dir", type=Path)
+    p.add_argument(
+        "--stream-dataset", help="Hugging Face owner/dataset ID; tokenize online"
+    )
+    p.add_argument("--stream-name", help="Optional dataset configuration name")
+    p.add_argument(
+        "--stream-revision", help="Hub revision; resolved to a pinned commit at startup"
+    )
+    p.add_argument("--stream-train-split", default="train")
+    p.add_argument(
+        "--stream-val-split",
+        help="Separate validation split, otherwise reserve first N documents",
+    )
+    p.add_argument("--stream-val-documents", type=int, default=1024)
+    p.add_argument("--stream-text-column", default="text")
     p.add_argument(
         "--tokenizer-dir",
         type=Path,
@@ -116,6 +131,25 @@ def resolve_plan(args):
         raise ValueError("Select --resume or --init-from, not both")
     if args.source == "sft" and not (args.resume or args.init_from):
         raise ValueError("SFT requires --init-from or --resume")
+    stream = None
+    if args.stream_dataset:
+        from .streaming import StreamConfig
+
+        if args.data_dir or args.source != "base" or recipe.get("data_profile"):
+            raise ValueError(
+                "Streaming text requires base training without --data-dir or a synthetic recipe"
+            )
+        stream = asdict(
+            StreamConfig(
+                dataset=args.stream_dataset,
+                name=args.stream_name,
+                revision=args.stream_revision,
+                train_split=args.stream_train_split,
+                val_split=args.stream_val_split,
+                val_documents=args.stream_val_documents,
+                text_column=args.stream_text_column,
+            )
+        )
     return {
         "model": model.to_dict(),
         "training": asdict(training),
@@ -126,6 +160,7 @@ def resolve_plan(args):
         "parameter_counts": model.parameter_counts(),
         "data_profile": "sft" if args.source == "sft" else recipe.get("data_profile"),
         "source": args.source,
+        "streaming": stream,
         "training_started": False,
     }
 
@@ -148,13 +183,12 @@ def train(args, plan):
     from mlx.utils import tree_flatten, tree_map
     from .model import HybridLM
     from .optim import HybridOptimizer, lr_multiplier
-    from .data import TokenDataset
     from .tokenizer import DeepSeekTokenizer
     from .checkpoint import load_checkpoint, save_checkpoint, checkpoint_directory
     from nanochat_mlx.common import set_memory_limit
 
-    if args.data_dir is None:
-        raise ValueError("--data-dir is required to start training")
+    if args.data_dir is None and plan["streaming"] is None:
+        raise ValueError("--data-dir or --stream-dataset is required to start training")
     config, training = HybridConfig(**plan["model"]), TrainingConfig(**plan["training"])
     directory = checkpoint_directory(args.output_dir, config, args.source)
     if not args.resume and directory.exists() and any(directory.glob("step_*.json")):
@@ -196,33 +230,24 @@ def train(args, plan):
             model.load_weights(list(source.items()), strict=True)
             del previous
         optimizer = HybridOptimizer(model, training)
-    loader = TokenDataset(
-        args.data_dir,
-        "train",
-        config.sequence_len,
-        args.device_batch_size,
-        loader_state,
-        tokenizer.contract,
-    )
+    loader, val = build_datasets(args, plan, tokenizer, loader_state)
+    if plan["streaming"] is not None:
+        print(json.dumps({"data_stream": loader.contract["source"]}), flush=True)
     if (
         plan["data_profile"] is not None
         and loader.meta.get("scenario_profile") != plan["data_profile"]
     ):
         raise ValueError("Recipe data profile does not match the prepared dataset")
-    val = TokenDataset(
-        args.data_dir,
-        "val",
-        config.sequence_len,
-        args.device_batch_size,
-        tokenizer_contract=tokenizer.contract,
-    )
     directory.mkdir(parents=True, exist_ok=True)
     grad_fn = nn.value_and_grad(model, lambda m, x, y: m(x, targets=y))
     start_step = optimizer.step
     if start_step >= plan["steps"]:
         raise ValueError("Checkpoint has already reached this training budget")
     mx.eval(model.parameters())
-    with (directory / "metrics.jsonl").open("a") as metrics:
+    with ExitStack() as resources, (directory / "metrics.jsonl").open("a") as metrics:
+        if plan["streaming"] is not None:
+            resources.callback(loader.close)
+            resources.callback(val.close)
         for step in range(start_step, plan["steps"]):
             start = time.monotonic()
             total_loss, total_weight, accum = 0.0, 0, None
@@ -271,7 +296,7 @@ def train(args, plan):
                 and (step + 1) % args.eval_every == 0
                 and args.eval_steps > 0
             ):
-                val.cursor, val.epoch = 0, 0
+                val.reset()
                 nll, count = 0.0, 0
                 for _ in range(args.eval_steps):
                     vx, vy = next(val)
@@ -295,6 +320,37 @@ def train(args, plan):
                     training,
                     run={"steps": plan["steps"], "micro_batch": args.device_batch_size},
                 )
+
+
+def build_datasets(args, plan, tokenizer, state=None):
+    """Create loaders without constructing a model (also used by data checks)."""
+    if plan["streaming"] is not None:
+        from .streaming import StreamConfig, open_streaming_datasets
+
+        return open_streaming_datasets(
+            StreamConfig(**plan["streaming"]),
+            tokenizer,
+            plan["model"]["sequence_len"],
+            args.device_batch_size,
+            state,
+        )
+    from .data import TokenDataset
+
+    if state is not None and state.get("format") == "nanochat-hf-stream-v1":
+        raise ValueError(
+            "Streaming checkpoint requires the original --stream-dataset options"
+        )
+    return tuple(
+        TokenDataset(
+            args.data_dir,
+            split,
+            plan["model"]["sequence_len"],
+            args.device_batch_size,
+            state if split == "train" else None,
+            tokenizer.contract,
+        )
+        for split in ("train", "val")
+    )
 
 
 def main(argv=None):

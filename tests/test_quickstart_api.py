@@ -80,3 +80,24 @@ def test_api_load_short_chat_unload(monkeypatch, tmp_path):
         )
         assert r.status_code == 400
         assert client.post("/chat/unload", json={}).json()["status"] == "unloaded"
+
+
+def test_streaming_job_can_inspect_without_prepared_data():
+    from nanochat_mlx.hybrid.training import build_parser, resolve_plan
+
+    req = quickstart.JobRequest(
+        stage="train", stream_dataset="test/corpus", stream_val_documents=16
+    )
+    cmd = quickstart.job_command(req)
+    assert "--data-dir" not in cmd and "--dry-run" in cmd
+    plan = resolve_plan(build_parser().parse_args(cmd[3:]))
+    assert plan["streaming"]["dataset"] == "test/corpus"
+    assert plan["streaming"]["val_documents"] == 16
+    req.execute = True
+    assert "--start-training" in quickstart.job_command(req)
+    req.data_dir = "/tmp/unused"
+    with pytest.raises(ValueError, match="without data_dir"):
+        quickstart.job_command(req)
+    req.data_dir, req.stage, req.init_from = None, "sft", "/tmp/checkpoint.json"
+    with pytest.raises(ValueError, match="pretraining"):
+        quickstart.job_command(req)
